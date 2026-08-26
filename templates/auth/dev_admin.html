@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Local admin preview{% endblock %}
+{% block content %}
+<section class="auth-shell">
+  <div class="auth-card">
+    <span class="eyebrow">Development preview</span>
+    <h1>Open a local admin workspace</h1>
+    <p class="muted">This shortcut is available only when explicitly enabled in a local development environment. It creates a verified administrator account without sending an email.</p>
+    {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+    {% if ready %}
+    <form method="post" class="stack-form">
+      <button class="button primary wide" type="submit">Continue to admin workspace</button>
+    </form>
+    {% else %}
+    <div class="empty-state">Set <code>DATABASE_URL</code>, <code>APP_ENV=development</code>, <code>DEV_ADMIN_ACCESS=1</code>, and <code>DEV_ADMIN_PASSWORD</code> before opening this page.</div>
+    {% endif %}
+    <p class="auth-footer"><a href="/">Return to Tender Sathi</a></p>
+  </div>
+</section>
+{% endblock %}

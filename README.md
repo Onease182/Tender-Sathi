@@ -40,6 +40,21 @@ py -3 -m venv .venv
 
 If `py` is unavailable, replace it with `python`. The helper uses the virtual-environment interpreter directly, so activation is not required. Do not use a globally installed Uvicorn, because it may import a different Python environment that does not contain FastAPI.
 
+### Local admin preview
+
+For local software review when SMTP signup verification is not yet configured, the app includes a **development-only** admin shortcut. It is disabled by default, only accepts requests from `127.0.0.1`/`::1`, and still requires PostgreSQL:
+
+```bat
+set APP_ENV=development
+set DEV_ADMIN_ACCESS=1
+set DEV_ADMIN_PASSWORD=choose-a-local-password-at-least-8-characters
+set DEV_ADMIN_EMAIL=admin@localhost.test
+set DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/tender_sathi
+run_windows.bat
+```
+
+Open `http://127.0.0.1:8000/dev-admin` and click **Continue to admin workspace**. This creates or updates the configured local admin as verified and signs it in without sending an email. Do not enable `DEV_ADMIN_ACCESS` on a public deployment, and do not use this shortcut as a production authentication mechanism.
+
 The SQLAlchemy startup hook creates the tables for a new local database. For an explicit SQL migration, apply `migrations/001_initial.sql` with `psql`:
 
 ```bash

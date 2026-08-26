@@ -11,7 +11,7 @@ from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -114,6 +114,20 @@ def send_email(recipient: str, subject: str, body: str) -> bool:
         return False
 
 
+def dev_admin_allowed(request: Request) -> bool:
+    environment = os.getenv("APP_ENV", "").strip().lower()
+    client_host = request.client.host if request.client else ""
+    return environment in {"development", "dev", "local"} and os.getenv("DEV_ADMIN_ACCESS", "0") == "1" and client_host in {"127.0.0.1", "::1", "localhost"}
+
+
+def dev_admin_email() -> str:
+    return os.getenv("DEV_ADMIN_EMAIL", "admin@localhost.test").strip().lower()
+
+
+def dev_admin_company() -> str:
+    return os.getenv("DEV_ADMIN_COMPANY", "Tender Sathi Demo Admin").strip() or "Tender Sathi Demo Admin"
+
+
 def create_token(db: Session, user_id: int, kind: str) -> str:
     raw = secrets.token_urlsafe(32)
     db.add(AuthToken(token=token_hash(raw), user_id=user_id, kind=kind, expires_at=datetime.utcnow() + timedelta(hours=24)))
@@ -131,6 +145,43 @@ def startup():
 @app.get("/", response_class=HTMLResponse)
 def landing(request: Request, db: Session | None = Depends(get_optional_db)):
     return page(request, "landing.html", user=user_from_request(request, db))
+
+
+@app.get("/dev-admin", response_class=HTMLResponse)
+def dev_admin_page(request: Request, db: Session | None = Depends(get_optional_db)):
+    if not dev_admin_allowed(request):
+        raise HTTPException(status_code=404)
+    password = os.getenv("DEV_ADMIN_PASSWORD", "")
+    error = None
+    if db is None:
+        error = "DATABASE_URL is not configured. Configure PostgreSQL before creating the local admin."
+    elif len(password) < 8:
+        error = "DEV_ADMIN_PASSWORD must contain at least 8 characters."
+    return page(request, "auth/dev_admin.html", title="Local admin preview", ready=error is None, error=error, dev_admin_email=dev_admin_email())
+
+
+@app.post("/dev-admin")
+def create_dev_admin(request: Request, db: Session | None = Depends(get_optional_db)):
+    if not dev_admin_allowed(request):
+        raise HTTPException(status_code=404)
+    password = os.getenv("DEV_ADMIN_PASSWORD", "")
+    if db is None or len(password) < 8:
+        return redirect("/dev-admin")
+    email = dev_admin_email()
+    user = db.scalar(select(User).where(User.email == email))
+    if user is None:
+        user = User(email=email, company_name=dev_admin_company(), password_hash=pwd_context.hash(password), is_verified=True, is_admin=True)
+        db.add(user)
+    else:
+        user.company_name = dev_admin_company()
+        user.password_hash = pwd_context.hash(password)
+        user.is_verified = True
+        user.is_admin = True
+    db.commit()
+    db.refresh(user)
+    request.session["user_id"] = user.id
+    flash(request, f"Local admin workspace opened for {email}.", "success")
+    return redirect("/dashboard")
 
 
 @app.get("/signup", response_class=HTMLResponse)

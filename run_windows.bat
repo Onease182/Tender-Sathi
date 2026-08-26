@@ -24,5 +24,8 @@ if "%DATABASE_URL%"=="" (
 )
 if "%SECRET_KEY%"=="" set SECRET_KEY=local-development-secret
 if "%APP_BASE_URL%"=="" set APP_BASE_URL=http://127.0.0.1:8000
+if "%APP_ENV%"=="" set APP_ENV=development
+if "%DEV_ADMIN_ACCESS%"=="" set DEV_ADMIN_ACCESS=1
+if "%DEV_ADMIN_PASSWORD%"=="" echo Set DEV_ADMIN_PASSWORD before opening http://127.0.0.1:8000/dev-admin
 
 .venv\Scripts\python.exe -m uvicorn app:app --reload
