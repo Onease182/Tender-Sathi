@@ -26,6 +26,20 @@ export APP_BASE_URL='http://localhost:8000'
 uvicorn app:app --reload
 ```
 
+### Windows
+
+In Command Prompt, `.venv\\Scripts\\activate` only works after the virtual environment has been created. From the repository folder, use the included `run_windows.bat` helper, or run the commands below:
+
+```bat
+cd /d E:\\Apps\\git\\Tender-Sathi-main\\Tender-Sathi-main
+py -3 -m venv .venv
+.venv\\Scripts\\python.exe -m pip install --upgrade pip
+.venv\\Scripts\\python.exe -m pip install -r requirements.txt
+.venv\\Scripts\\python.exe -m uvicorn app:app --reload
+```
+
+If `py` is unavailable, replace it with `python`. The helper uses the virtual-environment interpreter directly, so activation is not required. Do not use a globally installed Uvicorn, because it may import a different Python environment that does not contain FastAPI.
+
 The SQLAlchemy startup hook creates the tables for a new local database. For an explicit SQL migration, apply `migrations/001_initial.sql` with `psql`:
 
 ```bash

@@ -527,3 +527,9 @@ async def generate_exp2b(request: Request, user: User = Depends(require_user), d
     selected = [(by_id[item_id], str(form.get(f"production_description_{item_id}", "")).strip()) for item_id in ids if item_id in by_id]
     content = build_exp2b_doc(user.company_name, selected)
     return StreamingResponse(iter([content]), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Content-Disposition": 'attachment; filename="EXP-2b_Key_Activities.docx"'})
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("app:app", host="127.0.0.1", port=int(os.getenv("PORT", "8000")), reload=False)
