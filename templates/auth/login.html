@@ -1,0 +1,3 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}<section class="auth-card"><p class="eyebrow">Welcome back</p><h1>Sign in to your workspace.</h1><form method="post" class="stack"><label>Email address<input type="email" name="email" required></label><label>Password<input type="password" name="password" required></label><button class="button" type="submit">Sign in</button></form><div class="form-links"><a href="/forgot-password">Forgot password?</a><a href="/signup">Create an account</a></div></section>{% endblock %}

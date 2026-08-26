@@ -1,220 +1,126 @@
-# -*- coding: utf-8 -*-
-"""
-BidDocumentGenerator — placeholder replacement, image replacement,
-table cleanup, and document generation. Pure document logic, no Tkinter.
+"""Reusable, UI-independent Word document generation for Tender Sathi.
+
+The web app streams the returned bytes directly to the browser. No generated
+files, images, signatures, stamps, or PDFs are written by this module.
 """
 
-import os
+from __future__ import annotations
+
+import io
 import re
-import shutil
-import subprocess
-import tempfile
-import logging
+from decimal import Decimal
 from pathlib import Path
-from datetime import datetime
+from typing import Iterable
 
 from docx import Document
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches, Pt
 from lxml import etree
 
-logger = logging.getLogger(__name__)
+from format_utils import format_percentage
 
 
 class BidDocumentGenerator:
-    """Core logic for generating bid documents."""
+    """Core placeholder replacement and legacy bid template generation."""
 
-    def __init__(self, base_path):
+    def __init__(self, base_path, create_dirs=True):
         self.base_path = Path(base_path)
-        self.ensure_dirs()
+        if create_dirs:
+            self.ensure_dirs()
 
     def ensure_dirs(self):
-        for dir_name in ["templates", "output", "assets"]:
-            (self.base_path / dir_name).mkdir(parents=True, exist_ok=True)
+        # Kept for compatibility with the existing test suite and template
+        # layout. The web application never writes generated output here.
+        for directory in ("templates", "output", "assets"):
+            (self.base_path / directory).mkdir(parents=True, exist_ok=True)
 
-    def is_empty_value(self, value):
-        if value is None:
-            return True
-        return str(value).strip() == ""
-
-    def replace_text_in_paragraph(self, paragraph, key, value):
-        if key not in paragraph.text:
-            return
-            
-        # FIX 2: Replace with empty string if empty, so we don't leave raw {{KEY}} tags in the doc
-        val = "" if self.is_empty_value(value) else str(value)
-        full_text = paragraph.text.replace(key, val)
-        
-        if paragraph.runs:
-            first_run = paragraph.runs[0]
-            paragraph.clear()
-            new_run = paragraph.add_run(full_text)
-            new_run.bold = first_run.bold
-            new_run.italic = first_run.italic
-            if first_run.font.name:
-                new_run.font.name = first_run.font.name
-            if first_run.font.size:
-                new_run.font.size = first_run.font.size
+    @staticmethod
+    def is_empty_value(value):
+        return value is None or str(value).strip() == ""
 
     def replace_all_in_paragraph(self, paragraph, placeholders):
-        """Replace every placeholder found in a single paragraph."""
-        
-        # FIX 2: Try to replace within individual runs to preserve formatting
         for run in paragraph.runs:
             for key, value in placeholders.items():
                 if key in run.text:
-                    val = "" if self.is_empty_value(value) else str(value)
-                    run.text = run.text.replace(key, val)
-        
-        # Fallback for placeholders that span multiple runs
-        full_text = paragraph.text
-        remaining_keys = {
-            k: v for k, v in placeholders.items() 
-            if k in full_text
-        }
-        
-        if not remaining_keys:
+                    run.text = run.text.replace(key, "" if self.is_empty_value(value) else str(value))
+        remaining = {k: v for k, v in placeholders.items() if k in paragraph.text}
+        if not remaining:
             return
-            
-        new_text = full_text
-        for key, value in remaining_keys.items():
-            val = "" if self.is_empty_value(value) else str(value)
-            new_text = new_text.replace(key, val)
-            
+        text = paragraph.text
+        for key, value in remaining.items():
+            text = text.replace(key, "" if self.is_empty_value(value) else str(value))
         if paragraph.runs:
-            first_run = paragraph.runs[0]
+            first = paragraph.runs[0]
             paragraph.clear()
-            new_run = paragraph.add_run(new_text)
-            new_run.bold = first_run.bold
-            new_run.italic = first_run.italic
-            if first_run.font.name:
-                new_run.font.name = first_run.font.name
-            if first_run.font.size:
-                new_run.font.size = first_run.font.size
+            new_run = paragraph.add_run(text)
+            new_run.bold = first.bold
+            new_run.italic = first.italic
+            if first.font.name:
+                new_run.font.name = first.font.name
+            if first.font.size:
+                new_run.font.size = first.font.size
 
     def _clear_table_cell(self, cell):
-        for p in cell.paragraphs:
-            for run in p.runs:
+        for paragraph in cell.paragraphs:
+            for run in paragraph.runs:
                 run.text = ""
         for child in list(cell._element):
-            tag = etree.QName(child).localname if hasattr(child, 'tag') else ""
+            tag = etree.QName(child).localname if hasattr(child, "tag") else ""
             if tag not in ("p", "tbl", "tcPr"):
                 child.getparent().remove(child)
 
-    def clean_empty_partner_sections(self, doc, bid_data):
-       """Remove paragraphs and table cells containing empty partner
-       placeholders, and blank out whole signature-block columns for any
-       signatory (CEO/MD1/MD2) whose name field is empty."""
-
-       shared_fields = []   # duplicated identically across every column
-       signatory_fields = []  # unique to one column
-       for prefix in ("LEAD", "FIRST", "SECOND"):
-           shared_fields += [f"{prefix}_PARTNER_NAME", f"{prefix}_PARTNER_SHORT", f"{prefix}_ADDRESS"]
-           signatory_fields += [f"{prefix}_PARTNER_CEO", f"{prefix}_PARTNER_MD1", f"{prefix}_PARTNER_MD2"]
-
-       empty_shared = [f for f in shared_fields if self.is_empty_value(bid_data.get(f))]
-       empty_signatory = {f for f in signatory_fields if self.is_empty_value(bid_data.get(f))}
-
-       if not empty_shared and not empty_signatory:
-           return
-
-       shared_placeholders = []
-       for field in empty_shared:
-           shared_placeholders.extend([f"{{{{{field}}}}}", field])
-
-       all_empty_placeholders = list(shared_placeholders)
-       for field in empty_signatory:
-           all_empty_placeholders.extend([f"{{{{{field}}}}}", field])
-
-       paragraphs_to_remove = []
-       for paragraph in doc.paragraphs:
-           for ph in all_empty_placeholders:
-               if ph in paragraph.text:
-                   paragraphs_to_remove.append(paragraph)
-                   break
-       for p in paragraphs_to_remove:
-           p._element.getparent().remove(p._element)
-
-       for table in doc.tables:
-           # Map column index -> the signatory field that owns it, by
-           # scanning every row (the placeholder only appears once, but
-           # we don't know which row ahead of time).
-           column_field = {}
-           for row in table.rows:
-               if len(row.cells) == 1:
-                   continue
-               for col_idx, cell in enumerate(row.cells):
-                   for field in signatory_fields:
-                       if f"{{{{{field}}}}}" in cell.text:
-                           column_field[col_idx] = field
-                           break
-
-           columns_to_clear = {
-               col_idx for col_idx, field in column_field.items()
-               if field in empty_signatory
-           }
-
-           for row in list(table.rows):
-               if len(row.cells) == 1:
-                   cell_text = row.cells[0].text
-                   for ph in all_empty_placeholders:
-                       if ph in cell_text:
-                           table._element.remove(row._element)
-                           break
-                   continue
-
-               for col_idx, cell in enumerate(row.cells):
-                   if col_idx in columns_to_clear:
-                       self._clear_table_cell(cell)
-                   elif shared_placeholders:
-                       for ph in shared_placeholders:
-                           if ph in cell.text:
-                               self._clear_table_cell(cell)
-                               break
-
-   # ------------------------------------------------------------------
-   # FIX BUG 1: Use exact placeholder matching, not substring
-  
     def remove_partner_blocks(self, doc, partner_prefix):
-        paragraphs_to_remove = []
-        for paragraph in doc.paragraphs:
-            text = paragraph.text
-            if f"{{{{{partner_prefix}_" in text or f"{partner_prefix}_" in text:
-                paragraphs_to_remove.append(paragraph)
-        for p in paragraphs_to_remove:
-            try:
-                p._element.getparent().remove(p._element)
-            except Exception:
-                pass
-
+        for paragraph in list(doc.paragraphs):
+            if f"{{{{{partner_prefix}_" in paragraph.text or f"{partner_prefix}_" in paragraph.text:
+                paragraph._element.getparent().remove(paragraph._element)
         for table in doc.tables:
-            rows_to_remove = []
-            for row in table.rows:
-                for cell in row.cells:
-                    cell_text = cell.text
-                    if f"{{{{{partner_prefix}_" in cell_text or f"{partner_prefix}_" in cell_text:
-                        rows_to_remove.append(row)
-                        break
-            for row in rows_to_remove:
-                try:
+            for row in list(table.rows):
+                if any(f"{{{{{partner_prefix}_" in cell.text or f"{partner_prefix}_" in cell.text for cell in row.cells):
                     table._element.remove(row._element)
-                except Exception:
-                    pass
+
+    def clean_empty_partner_sections(self, doc, bid_data):
+        shared_fields = []
+        signatory_fields = []
+        for prefix in ("LEAD", "FIRST", "SECOND"):
+            shared_fields += [f"{prefix}_PARTNER_NAME", f"{prefix}_PARTNER_SHORT", f"{prefix}_ADDRESS"]
+            signatory_fields += [f"{prefix}_PARTNER_CEO", f"{prefix}_PARTNER_MD1", f"{prefix}_PARTNER_MD2"]
+        empty_shared = [field for field in shared_fields if self.is_empty_value(bid_data.get(field))]
+        empty_signatories = {field for field in signatory_fields if self.is_empty_value(bid_data.get(field))}
+        targets = [f"{{{{{field}}}}}" for field in empty_shared] + empty_shared
+        targets += [f"{{{{{field}}}}}" for field in empty_signatories] + list(empty_signatories)
+        for paragraph in list(doc.paragraphs):
+            if any(target in paragraph.text for target in targets):
+                paragraph._element.getparent().remove(paragraph._element)
+        for table in doc.tables:
+            column_field = {}
+            for row in table.rows:
+                for index, cell in enumerate(row.cells):
+                    for field in signatory_fields:
+                        if f"{{{{{field}}}}}" in cell.text:
+                            column_field[index] = field
+            clear_columns = {index for index, field in column_field.items() if field in empty_signatories}
+            for row in list(table.rows):
+                if len(row.cells) == 1 and any(target in row.cells[0].text for target in targets):
+                    table._element.remove(row._element)
+                    continue
+                for index, cell in enumerate(row.cells):
+                    if index in clear_columns or any(target in cell.text for target in targets):
+                        self._clear_table_cell(cell)
 
     def replace_in_document(self, doc, placeholders):
-        for p in doc.paragraphs:
-            self.replace_all_in_paragraph(p, placeholders)
+        paragraphs = list(doc.paragraphs)
         for table in doc.tables:
             for row in table.rows:
                 for cell in row.cells:
-                    for p in cell.paragraphs:
-                        self.replace_all_in_paragraph(p, placeholders)
+                    paragraphs.extend(cell.paragraphs)
         for section in doc.sections:
-            for p in section.header.paragraphs:
-                self.replace_all_in_paragraph(p, placeholders)
-            for p in section.footer.paragraphs:
-                self.replace_all_in_paragraph(p, placeholders)
+            paragraphs.extend(section.header.paragraphs)
+            paragraphs.extend(section.footer.paragraphs)
+        for paragraph in paragraphs:
+            self.replace_all_in_paragraph(paragraph, placeholders)
 
     def _all_paragraphs(self, doc):
-        """Yield paragraphs from document body, tables, headers, and footers."""
         yield from doc.paragraphs
         for table in doc.tables:
             for row in table.rows:
@@ -225,187 +131,170 @@ class BidDocumentGenerator:
             yield from section.footer.paragraphs
 
     def unresolved_placeholders(self, doc):
-        """Return unresolved {{PLACEHOLDER}} tokens after replacement."""
         found = set()
         for paragraph in self._all_paragraphs(doc):
             found.update(re.findall(r"\{\{[^{}]+\}\}", paragraph.text))
         return sorted(found)
 
-    _EMBED_ATTR = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed'
-
-    def replace_images_batch(self, doc, image_mapping, remove_keys=None):
-        """Replace images and remove only explicitly requested alt-text keys."""
-        replacements = 0
-        remove_keys = set(remove_keys or ())
-
-        def process_paragraph(paragraph):
-            nonlocal replacements
-            part = paragraph.part
-            for run in paragraph.runs:
-                for drawing in run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing'):
-                    for blip in drawing.findall('.//{http://schemas.openxmlformats.org/drawingml/2006/main}blip'):
-                        embed = blip.get(self._EMBED_ATTR)
-                        if not embed:
-                            continue
-                        docPr = drawing.find('.//{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}docPr')
-                        if docPr is None:
-                            continue
-                        alt_text = docPr.get('descr') or docPr.get('title') or ''
-                        candidate_keys = set(image_mapping).union(remove_keys)
-                        matches = [key for key in candidate_keys if key.upper() in alt_text.upper()]
-                        if not matches:
-                            continue
-                        # Prefer the most specific role-qualified key if an
-                        # alt text contains more than one searchable token.
-                        key = max(matches, key=len)
-                        if key in remove_keys:
-                            drawing_parent = drawing.getparent()
-                            if drawing_parent is not None:
-                                drawing_parent.remove(drawing)
-                                replacements += 1
-                                logger.info(f"Removed image with alt text matching {key}")
-                            break
-                        img_path = image_mapping.get(key)
-                        if img_path and os.path.exists(img_path):
-                            try:
-                                new_rId, _image = part.get_or_add_image(img_path)
-                                blip.set(self._EMBED_ATTR, new_rId)
-                                replacements += 1
-                            except Exception as e:
-                                logger.error(f"Failed to replace image {key}: {e}")
-                        break
-
-        for p in doc.paragraphs:
-            process_paragraph(p)
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for p in cell.paragraphs:
-                        process_paragraph(p)
-        for section in doc.sections:
-            for p in section.header.paragraphs:
-                process_paragraph(p)
-            for p in section.footer.paragraphs:
-                process_paragraph(p)
-        return replacements
-
     def determine_partner_count(self, data):
         if data.get("BID_TYPE") == "Single Bidder":
-            lead_name = data.get("LEAD_PARTNER_NAME", "")
-            if self.is_empty_value(lead_name):
+            if self.is_empty_value(data.get("LEAD_PARTNER_NAME")):
                 raise ValueError("Lead partner name is required for single bidder.")
             return 1
-        lead_name = data.get("LEAD_PARTNER_NAME", "")
-        first_name = data.get("FIRST_PARTNER_NAME", "")
-        second_name = data.get("SECOND_PARTNER_NAME", "")
-        lead_present = not self.is_empty_value(lead_name)
-        first_present = not self.is_empty_value(first_name)
-        second_present = not self.is_empty_value(second_name)
-        if not lead_present:
+        lead = not self.is_empty_value(data.get("LEAD_PARTNER_NAME"))
+        first = not self.is_empty_value(data.get("FIRST_PARTNER_NAME"))
+        second = not self.is_empty_value(data.get("SECOND_PARTNER_NAME"))
+        if not lead:
             raise ValueError("At least the lead partner must be filled to generate the bid.")
-        if second_present and not first_present:
+        if second and not first:
             raise ValueError("The first partner must be filled before the second partner.")
-        return 3 if second_present else 2 if first_present else 1
+        return 3 if second else 2 if first else 1
 
     def select_template(self, partner_count):
-        if partner_count == 1:
-            template_name = "master_template_1.docx"
-            if not (self.base_path / "templates" / template_name).exists():
-                template_name = "master_template_2.docx"
-            return template_name
-        elif partner_count == 2:
-            return "master_template_2.docx"
-        else:
-            return "master_template_3.docx"
+        names = {1: "master_template_1.docx", 2: "master_template_2.docx", 3: "master_template_3.docx"}
+        selected = names[partner_count]
+        if partner_count == 1 and not (self.base_path / "templates" / selected).exists():
+            selected = names[2]
+        return selected
 
-    def generate(self, data, image_mapping):
+    def generate_bytes(self, data):
         partner_count = self.determine_partner_count(data)
-        template_name = self.select_template(partner_count)
-        template_path = self.base_path / "templates" / template_name
-
+        template_path = self.base_path / "templates" / self.select_template(partner_count)
         if not template_path.exists():
             raise FileNotFoundError(f"Template not found: {template_path}")
-
         doc = Document(template_path)
-
         if partner_count == 1:
             self.remove_partner_blocks(doc, "FIRST")
             self.remove_partner_blocks(doc, "SECOND")
         elif partner_count == 2:
             self.remove_partner_blocks(doc, "SECOND")
-
         self.clean_empty_partner_sections(doc, data)
-
-        placeholders = {f"{{{{{k}}}}}": v for k, v in data.items()}
-        self.replace_in_document(doc, placeholders)
-        image_mapping = dict(image_mapping or {})
-        # Build an explicit role-specific removal set. Do not add deletion
-        # sentinels to image_mapping, because that can collide with stale or
-        # cross-role image assignments.
-        remove_image_keys = set()
-        for prefix in ("LEAD", "FIRST", "SECOND"):
-            for suffix in ("PARTNER_MD1", "PARTNER_MD2"):
-                key = f"{prefix}_{suffix}"
-                if self.is_empty_value(data.get(key)):
-                    remove_image_keys.add(key)
-        self.replace_images_batch(doc, image_mapping, remove_keys=remove_image_keys)
+        self.replace_in_document(doc, {f"{{{{{key}}}}}": value for key, value in data.items()})
         unresolved = self.unresolved_placeholders(doc)
         if unresolved:
-            raise ValueError(
-                "The selected template contains unresolved placeholders: "
-                + ", ".join(unresolved)
-            )
-        jv_name = data.get("JV_NAME", "bid")
-        safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', jv_name)[:50].strip('_')
-        if not safe_name:
-            safe_name = "bid"
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_filename = f"generated_bid_{safe_name}_{timestamp}.docx"
-        
-        output_path = self.base_path / "output" / output_filename
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        # Save first to a temporary file, then replace the destination atomically.
-        with tempfile.NamedTemporaryFile(
-            prefix=".bid_", suffix=".docx", dir=output_path.parent, delete=False
-        ) as tmp:
-            temp_path = Path(tmp.name)
-        try:
-            doc.save(str(temp_path))
-            temp_path.replace(output_path)
-        finally:
-            if temp_path.exists():
-                temp_path.unlink()
-        return output_path
+            raise ValueError("The selected template contains unresolved placeholders: " + ", ".join(unresolved))
+        output = io.BytesIO()
+        doc.save(output)
+        output.seek(0)
+        return output.getvalue()
 
-    def convert_to_pdf(self, docx_path):
-        """Convert a generated .docx to .pdf for preview/splitting.
+    # A compatibility alias: callers receive bytes instead of a disk path.
+    generate = generate_bytes
 
-        Tries docx2pdf first (uses Microsoft Word — works on Windows/Mac,
-        matches this app's existing environment). Falls back to LibreOffice
-        headless conversion if docx2pdf/Word isn't available.
-        """
-        docx_path = Path(docx_path)
-        pdf_path = docx_path.with_suffix(".pdf")
 
-        try:
-            from docx2pdf import convert as _docx2pdf_convert
-            _docx2pdf_convert(str(docx_path), str(pdf_path))
-            if pdf_path.exists():
-                return pdf_path
-        except Exception as e:
-            logger.warning(f"docx2pdf conversion failed, trying LibreOffice: {e}")
+def _money(value):
+    try:
+        return f"{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return "0.00"
 
-        soffice = shutil.which("soffice") or shutil.which("libreoffice")
-        if soffice:
-            subprocess.run(
-                [soffice, "--headless", "--convert-to", "pdf",
-                 "--outdir", str(docx_path.parent), str(docx_path)],
-                check=True, timeout=120,
-            )
-            if pdf_path.exists():
-                return pdf_path
 
-        raise RuntimeError(
-            "Could not convert the document to PDF. Install Microsoft Word "
-            "(for docx2pdf) or LibreOffice, then try again."
-        )
+def _set_cell(cell, text, bold=False):
+    cell.text = str(text or "")
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    for paragraph in cell.paragraphs:
+        paragraph.paragraph_format.space_after = Pt(0)
+        for run in paragraph.runs:
+            run.bold = bold
+            run.font.size = Pt(8.5)
+
+
+def _add_table(doc, headers: Iterable[str], rows: Iterable[Iterable[str]]):
+    rows = list(rows)
+    table = doc.add_table(rows=1, cols=len(list(headers)))
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.style = "Table Grid"
+    for cell, header in zip(table.rows[0].cells, headers):
+        _set_cell(cell, header, bold=True)
+    for values in rows:
+        cells = table.add_row().cells
+        for cell, value in zip(cells, values):
+            _set_cell(cell, value)
+    return table
+
+
+def _new_form(title, subtitle=None):
+    doc = Document()
+    section = doc.sections[0]
+    section.top_margin = Inches(0.55)
+    section.bottom_margin = Inches(0.55)
+    section.left_margin = Inches(0.55)
+    section.right_margin = Inches(0.55)
+    heading = doc.add_heading(title, level=1)
+    heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if subtitle:
+        p = doc.add_paragraph(subtitle)
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    return doc
+
+
+def build_fin2_doc(company_name, rows, nrb_indices, current_index, selected_rows, average):
+    doc = _new_form("FORM FIN-2", "Average Annual Construction Turnover")
+    doc.add_paragraph(f"Applicant: {company_name}")
+    doc.add_paragraph("The calculations below use the latest published NRB index as the reference index.")
+    year_rows = []
+    all_jv_rows = []
+    for row in rows:
+        index = Decimal(str(nrb_indices.get(row.fiscal_year, 0) or 0))
+        factor = current_index / index if index else 0
+        total = Decimal(str(row.turnover_amount or 0))
+        jv_total = sum((Decimal(str(entry.attributed_amount or 0)) for entry in row.jv_entries), Decimal("0"))
+        present = total * factor
+        year_rows.append((row.fiscal_year, _money(row.turnover_amount), _money(jv_total), _money(total), _money(index), f"{factor:.4f}", _money(present)))
+        for entry in row.jv_entries:
+            all_jv_rows.append((entry.jv_name, entry.jv_address, entry.vat_number, _money(entry.attributed_amount), f"{float(entry.share_percentage or 0):.2f}%", _money(float(entry.attributed_amount or 0) * float(entry.share_percentage or 0) / 100)))
+    _add_table(doc, ["Fiscal year", "Amount", "From JV", "Total", "NRB index", "Factor", "Present value"], year_rows)
+    doc.add_heading("Best 3 of the Most Recent 5 Fiscal Years", level=2)
+    summary_rows = [(row[0], row[-1]) for row in selected_rows]
+    summary_rows.append(("Average Annual Construction Turnover", _money(average)))
+    _add_table(doc, ["Selected year", "Escalated amount (NPR)"], summary_rows)
+    doc.add_heading("JV Turnover Breakdown", level=2)
+    _add_table(doc, ["JV name", "Address", "VAT no.", "Amount", "Share", "Amount-share from JV"], all_jv_rows or [("No JV entries", "", "", "", "", "")])
+    return _doc_bytes(doc)
+
+
+def _experience_block(doc, entry, description_label, description):
+    doc.add_heading(f"{entry.contract_id or 'Experience entry'} — {entry.contract_name}", level=2)
+    _add_table(doc, ["Field", "Details"], [
+        ("Starting / ending month-year", f"{entry.start_month_year} – {entry.end_month_year}"),
+        ("Award / completion date", f"{entry.award_date} / {entry.completion_date}"),
+        ("Role of bidder", entry.role),
+        ("Total contract amount (NRS)", _money(entry.total_contract_amount)),
+        ("JV/subcontractor participation", f"{float(entry.participation_percentage or 0):.2f}% / {_money(entry.participation_amount)}"),
+        ("Employer", f"{entry.employer_name}; {entry.employer_address}; {entry.employer_phone}; {entry.employer_email}"),
+        ("Brief description of works", entry.work_description),
+        (description_label, description),
+    ])
+
+
+def build_exp1_doc(company_name, entries):
+    doc = _new_form("FORM EXP-1", "General Construction Experience")
+    doc.add_paragraph(f"Bidder: {company_name}")
+    rows = []
+    for entry in entries:
+        rows.append((f"{entry.start_month_year} – {entry.end_month_year}", entry.award_date, f"{entry.contract_id} / {entry.contract_name}", f"{entry.employer_name}\n{entry.employer_address}", entry.work_description, entry.role))
+    _add_table(doc, ["Starting / ending", "Year", "Contract ID / name", "Employer address", "Brief description", "Role"], rows or [("", "", "No entries selected", "", "", "")])
+    return _doc_bytes(doc)
+
+
+def build_exp2a_doc(company_name, entry, similarity):
+    doc = _new_form("FORM EXP-2(a)", "Specific Construction Experience")
+    doc.add_paragraph(f"Bidder: {company_name}")
+    _experience_block(doc, entry, "Description of similarity", similarity)
+    return _doc_bytes(doc)
+
+
+def build_exp2b_doc(company_name, entries_with_descriptions):
+    doc = _new_form("FORM EXP-2(b)", "Specific Construction Experience in Key Activities")
+    doc.add_paragraph(f"Bidder: {company_name}")
+    for entry, description in entries_with_descriptions:
+        _experience_block(doc, entry, "Production rate description", description)
+    if not entries_with_descriptions:
+        doc.add_paragraph("No entries selected.")
+    return _doc_bytes(doc)
+
+
+def _doc_bytes(doc):
+    stream = io.BytesIO()
+    doc.save(stream)
+    return stream.getvalue()

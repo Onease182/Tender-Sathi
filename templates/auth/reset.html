@@ -1,0 +1,3 @@
+{% extends "base.html" %}
+{% block title %}Choose a new password{% endblock %}
+{% block content %}<section class="auth-card"><p class="eyebrow">Account recovery</p><h1>Choose a new password.</h1><form method="post" class="stack"><input type="hidden" name="token" value="{{ token }}"><label>New password<input type="password" name="password" minlength="8" required></label><button class="button" type="submit">Update password</button></form></section>{% endblock %}

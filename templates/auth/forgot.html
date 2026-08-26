@@ -1,0 +1,3 @@
+{% extends "base.html" %}
+{% block title %}Reset password{% endblock %}
+{% block content %}<section class="auth-card"><p class="eyebrow">Account recovery</p><h1>Reset your password.</h1><p class="muted">Enter the email for your company account. If it is registered, we will send a time-limited reset link.</p><form method="post" class="stack"><label>Email address<input type="email" name="email" required></label><button class="button" type="submit">Send reset link</button></form><p class="form-foot"><a href="/login">Back to sign in</a></p></section>{% endblock %}
