@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 from starlette.middleware.sessions import SessionMiddleware
 
-from database import AuthToken, Draft, Experience, FinancialJVEntry, FinancialYear, NRBIndex, PartnerProfile, User, get_db, init_db
+from database import AuthToken, Draft, Experience, FinancialJVEntry, FinancialYear, NRBIndex, PartnerProfile, User, get_db, get_optional_db, init_db
 from doc_generator import BidDocumentGenerator, build_exp1_doc, build_exp2a_doc, build_exp2b_doc, build_fin2_doc
 from format_utils import format_percentage
 import profiles as profile_store
@@ -62,7 +62,9 @@ def page(request: Request, template: str, user: User | None = None, **context):
     return TEMPLATES.TemplateResponse(template, {"request": request, "user": user, "flashes": consume_flashes(request), **context})
 
 
-def user_from_request(request: Request, db: Session):
+def user_from_request(request: Request, db: Session | None):
+    if db is None:
+        return None
     user_id = request.session.get("user_id")
     if not user_id:
         return None
@@ -127,7 +129,7 @@ def startup():
 
 
 @app.get("/", response_class=HTMLResponse)
-def landing(request: Request, db: Session = Depends(get_db)):
+def landing(request: Request, db: Session | None = Depends(get_optional_db)):
     return page(request, "landing.html", user=user_from_request(request, db))
 
 

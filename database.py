@@ -144,6 +144,22 @@ def get_db() -> Generator:
         db.close()
 
 
+def get_optional_db() -> Generator:
+    """Yield a session when PostgreSQL is configured, otherwise yield None.
+
+    Public pages use this dependency so a fresh checkout can show setup
+    guidance instead of returning a database-configuration stack trace.
+    """
+    if SessionLocal is None:
+        yield None
+        return
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 def init_db() -> None:
     if engine is None:
         return

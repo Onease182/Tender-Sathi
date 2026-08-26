@@ -3,9 +3,16 @@ from io import BytesIO
 from types import SimpleNamespace
 
 from docx import Document
+from fastapi.testclient import TestClient
 
-from app import bid_data, financial_calculation
+from app import app, bid_data, financial_calculation
 from doc_generator import build_exp1_doc, build_fin2_doc
+
+
+def test_landing_page_loads_without_database_configuration(monkeypatch):
+    response = TestClient(app).get("/")
+    assert response.status_code == 200
+    assert "Build bid documents with confidence" in response.text
 
 
 def test_financial_calculation_selects_best_three_of_latest_five():
