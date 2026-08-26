@@ -237,10 +237,11 @@ def build_fin2_doc(company_name, rows, nrb_indices, current_index, selected_rows
     for row in rows:
         index = Decimal(str(nrb_indices.get(row.fiscal_year, 0) or 0))
         factor = current_index / index if index else 0
-        total = Decimal(str(row.turnover_amount or 0))
+        amount = Decimal(str(row.turnover_amount or 0))
         jv_total = sum((Decimal(str(entry.attributed_amount or 0)) for entry in row.jv_entries), Decimal("0"))
+        total = amount + jv_total
         present = total * factor
-        year_rows.append((row.fiscal_year, _money(row.turnover_amount), _money(jv_total), _money(total), _money(index), f"{factor:.4f}", _money(present)))
+        year_rows.append((row.fiscal_year, _money(amount), _money(jv_total), _money(total), _money(index), f"{factor:.4f}", _money(present)))
         for entry in row.jv_entries:
             all_jv_rows.append((entry.jv_name, entry.jv_address, entry.vat_number, _money(entry.attributed_amount), f"{float(entry.share_percentage or 0):.2f}%", _money(float(entry.attributed_amount or 0) * float(entry.share_percentage or 0) / 100)))
     _add_table(doc, ["Fiscal year", "Amount", "From JV", "Total", "NRB index", "Factor", "Present value"], year_rows)
@@ -267,13 +268,24 @@ def _experience_block(doc, entry, description_label, description):
     ])
 
 
+def _experience_year(entry):
+    """Return the completion year for EXP-1's distinct Year column.
+
+    The reference prompt leaves the meaning of Year ambiguous. Completion
+    year is the least surprising interpretation for a completed-project form.
+    """
+    source = str(entry.completion_date or entry.end_month_year or "")
+    matches = re.findall(r"(?<!\d)\d{4}(?!\d)", source)
+    return matches[-1] if matches else ""
+
+
 def build_exp1_doc(company_name, entries):
     doc = _new_form("FORM EXP-1", "General Construction Experience")
     doc.add_paragraph(f"Bidder: {company_name}")
     rows = []
     for entry in entries:
-        rows.append((f"{entry.start_month_year} – {entry.end_month_year}", entry.award_date, f"{entry.contract_id} / {entry.contract_name}", f"{entry.employer_name}\n{entry.employer_address}", entry.work_description, entry.role))
-    _add_table(doc, ["Starting / ending", "Year", "Contract ID / name", "Employer address", "Brief description", "Role"], rows or [("", "", "No entries selected", "", "", "")])
+        rows.append((entry.start_month_year, entry.end_month_year, _experience_year(entry), f"{entry.contract_id} / {entry.contract_name}", f"{entry.employer_name}\\n{entry.employer_address}", entry.work_description, entry.role))
+    _add_table(doc, ["Starting month/year", "Ending month/year", "Year", "Contract ID / name", "Employer address", "Brief description", "Role"], rows or [("", "", "", "No entries selected", "", "", "")])
     return _doc_bytes(doc)
 
 

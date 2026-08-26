@@ -282,9 +282,11 @@ def financial_calculation(rows, indices):
         index_obj = next((item for item in indices if item.fiscal_year == row.fiscal_year), None)
         index = Decimal(index_obj.index_value) if index_obj else Decimal("0")
         factor = current_index / index if index else Decimal("0")
-        total = Decimal(row.turnover_amount or 0)
+        amount = Decimal(row.turnover_amount or 0)
+        from_jv = sum((Decimal(item.attributed_amount or 0) for item in row.jv_entries), Decimal("0"))
+        total = amount + from_jv
         present = total * factor
-        enriched.append({"year": row.fiscal_year, "amount": total, "from_jv": sum((Decimal(item.attributed_amount or 0) for item in row.jv_entries), Decimal("0")), "total": total, "index": index, "factor": factor, "present": present, "object": row})
+        enriched.append({"year": row.fiscal_year, "amount": amount, "from_jv": from_jv, "total": total, "index": index, "factor": factor, "present": present, "object": row})
     recent = sorted(enriched, key=lambda item: fy_sort(item["year"]), reverse=True)[:5]
     selected = sorted(recent, key=lambda item: item["present"], reverse=True)[:3]
     average = sum((item["present"] for item in selected), Decimal("0")) / len(selected) if selected else Decimal("0")
