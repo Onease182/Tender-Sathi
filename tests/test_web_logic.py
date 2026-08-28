@@ -6,7 +6,7 @@ from docx import Document
 from fastapi.testclient import TestClient
 
 from app import app, bid_data, financial_calculation
-from doc_generator import build_exp1_doc, build_fin2_doc
+from doc_generator import build_exp1_doc, build_experience_doc, build_fin2_doc
 
 
 def test_landing_page_loads_without_database_configuration(monkeypatch):
@@ -52,6 +52,18 @@ def test_exp1_year_column_uses_completion_year():
     table = Document(BytesIO(build_exp1_doc("Example Builders", [entry]))).tables[0]
     assert [cell.text for cell in table.rows[0].cells[:3]] == ["Starting month/year", "Ending month/year", "Year"]
     assert table.rows[1].cells[2].text == "2080"
+
+
+def test_experience_document_holds_all_three_forms_and_rolling_summary():
+    entry = SimpleNamespace(start_month_year="Jan 2078", end_month_year="Dec 2080", award_date="2078-01-05", completion_date="2080-12-30", contract_id="C-1", contract_name="Bridge", employer_name="Road Office", employer_address="Pokhara", work_description="Bridge construction", role="Contractor", total_contract_amount=Decimal("100"), participation_percentage=Decimal("100"), participation_amount=Decimal("100"), item_quantities=[])
+    summary = [{"item": "M20", "unit": "m3", "from_bs": "2080-01-01", "till_bs": "2080-12-30", "quantity": Decimal("17"), "projects": 2}]
+    document = Document(BytesIO(build_experience_doc("Example Builders", [entry], entry, [(entry, "")], summary)))
+    text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    assert "FORM EXP-1" in text and "FORM EXP-2(a)" in text and "FORM EXP-2(b)" in text
+    assert "Rolling 12-Month Quantity Summary" in text
+    summary_table = document.tables[-1]
+    assert [cell.text for cell in summary_table.rows[0].cells] == ["Item / activity", "Unit", "12-month window (BS)", "Total quantity", "Projects"]
+    assert [cell.text for cell in summary_table.rows[1].cells] == ["M20", "m3", "2080-01-01 to 2080-12-30", "17", "2"]
 
 
 def test_fiscal_year_validation_rejects_typos():

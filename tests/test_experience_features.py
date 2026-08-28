@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 
-from app import item_rolling_summary, normalized_items
+from app import filtered_item_summary, item_rolling_summary, normalized_items
 from bs_calendar import normalize_date_pair
 
 
@@ -41,6 +41,19 @@ def test_rolling_summary_selects_highest_total_not_latest_window():
     assert result[0]["quantity"] == Decimal("180")
     assert result[0]["projects"] == 2
     assert result[0]["till_ad"] == "2024-04-30"
+
+
+def test_filtered_item_summary_keeps_only_requested_key_activities():
+    experiences = [
+        SimpleNamespace(item_quantities=[
+            {"item": "M20", "item_key": "m20", "unit": "m3", "quantity": "10", "from_ad": "2023-05-01", "till_ad": "2024-04-30"},
+            {"item": "TMT", "item_key": "tmt", "unit": "MT", "quantity": "4", "from_ad": "2023-05-01", "till_ad": "2024-04-30"},
+        ]),
+    ]
+    summary = item_rolling_summary(experiences)
+    assert [row["item"] for row in filtered_item_summary(summary, ["m20||m3"])] == ["M20"]
+    assert [row["item"] for row in filtered_item_summary(summary, [])] == ["M20", "TMT"]
+    assert filtered_item_summary(summary, ["m20||MT"]) == []
 
 
 def test_normalized_items_keeps_optional_dates_empty():

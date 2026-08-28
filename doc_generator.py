@@ -311,9 +311,14 @@ def _experience_year(entry):
     return matches[-1] if matches else ""
 
 
-def build_exp1_doc(company_name, entries):
-    doc = _new_form("FORM EXP-1", "General Construction Experience", company_name=company_name)
-    doc.add_paragraph(f"Bidder: {company_name}")
+def _form_heading(doc, title, subtitle):
+    heading = doc.add_heading(title, level=1)
+    heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    paragraph = doc.add_paragraph(subtitle)
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+
+def _write_exp1(doc, entries):
     rows = []
     for entry in entries:
         start_month = _month_year_from_bs(getattr(entry, "award_date", "")) or getattr(entry, "start_month_year", "")
@@ -327,23 +332,44 @@ def build_exp1_doc(company_name, entries):
     if item_rows:
         doc.add_heading("Supplementary key activity quantities", level=2)
         _add_table(doc, ["Item / activity", "Unit", "Quantity", "From (BS)", "Till (BS)", "Project"], item_rows)
+
+
+def _write_rolling_summary(doc, item_summary):
+    doc.add_heading("Rolling 12-Month Quantity Summary", level=2)
+    rows = [(row["item"], row.get("unit") or "", f"{row.get('from_bs', '')} to {row.get('till_bs', '')}", str(row.get("quantity", "")), str(row.get("projects", ""))) for row in item_summary]
+    if not rows:
+        doc.add_paragraph("No dated item rows are available for a rolling 12-month total.")
+        return
+    _add_table(doc, ["Item / activity", "Unit", "12-month window (BS)", "Total quantity", "Projects"], rows)
+
+
+def build_exp1_doc(company_name, entries):
+    doc = _new_form("FORM EXP-1", "General Construction Experience", company_name=company_name)
+    doc.add_paragraph(f"Bidder: {company_name}")
+    _write_exp1(doc, entries)
     return _doc_bytes(doc)
 
 
-def build_exp2a_doc(company_name, entry, similarity):
-    doc = _new_form("FORM EXP-2(a)", "Specific Construction Experience", company_name=company_name)
+def build_experience_doc(company_name, entries, similarity_entry=None, key_activity_entries=(), item_summary=()):
+    """Build a single Word document holding the EXP-1, EXP-2(a) and EXP-2(b) forms."""
+    doc = _new_form("Experience Forms", "EXP-1, EXP-2(a) and EXP-2(b)", company_name=company_name)
     doc.add_paragraph(f"Bidder: {company_name}")
-    _experience_block(doc, entry, "Description of similarity", similarity)
-    return _doc_bytes(doc)
-
-
-def build_exp2b_doc(company_name, entries_with_descriptions):
-    doc = _new_form("FORM EXP-2(b)", "Specific Construction Experience in Key Activities", company_name=company_name)
-    doc.add_paragraph(f"Bidder: {company_name}")
-    for entry, description in entries_with_descriptions:
+    _form_heading(doc, "FORM EXP-1", "General Construction Experience")
+    _write_exp1(doc, entries)
+    doc.add_page_break()
+    _form_heading(doc, "FORM EXP-2(a)", "Specific Construction Experience")
+    if similarity_entry is None:
+        doc.add_paragraph("No qualifying contract selected.")
+    else:
+        _experience_block(doc, similarity_entry, "Description of similarity", "")
+    doc.add_page_break()
+    _form_heading(doc, "FORM EXP-2(b)", "Specific Construction Experience in Key Activities")
+    key_activity_entries = list(key_activity_entries)
+    for entry, description in key_activity_entries:
         _experience_block(doc, entry, "Production rate description", description)
-    if not entries_with_descriptions:
+    if not key_activity_entries:
         doc.add_paragraph("No entries selected.")
+    _write_rolling_summary(doc, list(item_summary))
     return _doc_bytes(doc)
 
 
