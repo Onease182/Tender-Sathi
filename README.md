@@ -6,7 +6,7 @@ Tender Sathi is a multi-tenant FastAPI web application for Nepali construction c
 
 The application now uses **FastAPI, Jinja2, vanilla JavaScript, PostgreSQL, SQLAlchemy, and python-docx**. Each company account has isolated partner profiles, saved bid drafts, financial history, JV turnover entries, and construction experience records. Shared NRB index reference values are maintained by an administrator.
 
-Financial History calculates the latest-index escalation factor at generation time, selects the three highest escalated amounts from the most recent five fiscal years, and shows the resulting average in a dynamic FIN-2 Word document. Experience entries can be selected independently for EXP-1, one EXP-2(a) qualifying contract, and one or more EXP-2(b) key-activity blocks. Similarity and production-rate descriptions are intentionally entered fresh for every generation and are never stored against the reusable experience entry.
+Financial History calculates the latest-index escalation factor at generation time, selects the three highest escalated amounts from the most recent five fiscal years, and shows the resulting average in a dynamic FIN-2 Word document. Selected experience entries produce a single Word document that contains EXP-1, EXP-2(a) for the chosen qualifying contract, and EXP-2(b) key-activity blocks followed by the rolling 12-month quantity summary. Similarity and production-rate descriptions are intentionally entered fresh for every generation and are never stored against the reusable experience entry.
 
 The web version deliberately does **not** include signature or stamp images, supporting-document uploads, PDF export, PDF splitting, or PDF preview. Generated Word documents are assembled in memory and streamed directly to the browser.
 
