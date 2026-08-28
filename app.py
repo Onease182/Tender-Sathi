@@ -728,7 +728,7 @@ async def generate_exp2a(request: Request, user: User = Depends(require_user), d
     if entry is None:
         flash(request, "Select one experience entry for EXP-2(a).", "error")
         return redirect("/dashboard", section="experience")
-    content = build_exp2a_doc(user.company_name, entry, str(form.get("similarity_description", "")).strip())
+    content = build_exp2a_doc(user.company_name, entry, "")
     return StreamingResponse(iter([content]), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Content-Disposition": 'attachment; filename="EXP-2a_Specific_Experience.docx"'})
 
 
@@ -739,7 +739,7 @@ async def generate_exp2b(request: Request, user: User = Depends(require_user), d
     ids = [int(value) for value in form.getlist("experience_ids") if str(value).isdigit()]
     entries = db.scalars(select(Experience).where(Experience.user_id == user.id, Experience.id.in_(ids))).all() if ids else []
     by_id = {entry.id: entry for entry in entries}
-    selected = [(by_id[item_id], str(form.get(f"production_description_{item_id}", "")).strip()) for item_id in ids if item_id in by_id]
+    selected = [(by_id[item_id], "") for item_id in ids if item_id in by_id]
     content = build_exp2b_doc(user.company_name, selected)
     return StreamingResponse(iter([content]), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Content-Disposition": 'attachment; filename="EXP-2b_Key_Activities.docx"'})
 
