@@ -109,6 +109,7 @@ class Experience(Base):
     total_contract_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
     participation_percentage: Mapped[Decimal] = mapped_column(Numeric(7, 2), default=100)
     participation_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
+    item_quantities: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     user: Mapped[User] = relationship(back_populates="experiences")

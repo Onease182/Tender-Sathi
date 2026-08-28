@@ -5,7 +5,7 @@ import logging
 import os
 import secrets
 import smtplib
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 from pathlib import Path
@@ -26,6 +26,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from database import AuthToken, Draft, Experience, FinancialJVEntry, FinancialYear, NRBIndex, PartnerProfile, User, get_db, get_optional_db, init_db
 from doc_generator import BidDocumentGenerator, build_exp1_doc, build_exp2a_doc, build_exp2b_doc, build_fin2_doc
 from format_utils import format_percentage
+from bs_calendar import normalize_date_pair, period_bounds, display_bs
 import profiles as profile_store
 import drafts as draft_store
 
@@ -424,6 +425,50 @@ def money(value):
         return "0.00"
 
 
+def normalized_items(form):
+    names, units, quantities, starts, ends = (form.getlist(name) for name in ("item_name", "item_unit", "item_quantity", "item_from", "item_till"))
+    items = []
+    for index, raw_name in enumerate(names):
+        name = str(raw_name).strip()
+        raw_quantity = quantities[index] if index < len(quantities) else ""
+        if not name and not str(raw_quantity).strip():
+            continue
+        quantity = decimal(raw_quantity)
+        if not name or quantity <= 0:
+            continue
+        item = {"item": name, "item_key": " ".join(name.lower().split()), "unit": str(units[index] if index < len(units) else "").strip(), "quantity": str(quantity)}
+        for label, values in (("from", starts), ("till", ends)):
+            raw_date = str(values[index] if index < len(values) else "").strip()
+            if raw_date:
+                normalized = normalize_date_pair(raw_date, "auto")
+                item[f"{label}_bs"] = normalized["bs"]
+                item[f"{label}_ad"] = normalized["ad"]
+        items.append(item)
+    return items
+
+
+def item_rolling_summary(experiences):
+    groups = defaultdict(list)
+    for entry in experiences:
+        for item in (entry.item_quantities or []):
+            start, end = period_bounds(item)
+            if not start or not end or end < start:
+                continue
+            key = (item.get("item_key") or item.get("item", "").strip().lower(), item.get("unit", ""))
+            groups[key].append((entry, item, start, end))
+    summaries = []
+    for (item_key, unit), rows in groups.items():
+        windows = []
+        for entry, item, start, end in rows:
+            window_end = end
+            window_start = window_end - timedelta(days=364)
+            contributing = [(other, other_start, other_end) for _, other, other_start, other_end in rows if other_start <= window_end and other_end >= window_start]
+            total = sum(Decimal(str(other.get("quantity", 0))) for other, _, _ in contributing)
+            windows.append({"item": item.get("item", item_key), "unit": unit, "from_ad": window_start.isoformat(), "till_ad": window_end.isoformat(), "from_bs": display_bs(window_start.isoformat()), "till_bs": display_bs(window_end.isoformat()), "quantity": total, "projects": len(contributing)})
+        summaries.append(max(windows, key=lambda row: row["till_ad"]))
+    return sorted(summaries, key=lambda row: (row["item"].lower(), row["unit"]))
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
     if not user.is_verified:
@@ -436,7 +481,7 @@ def dashboard(request: Request, user: User = Depends(require_user), db: Session 
     years = financial_rows(db, user.id)
     experiences = db.scalars(select(Experience).where(Experience.user_id == user.id).order_by(Experience.updated_at.desc())).all()
     indices = db.scalars(select(NRBIndex).order_by(NRBIndex.fiscal_year.desc())).all()
-    return page(request, "dashboard.html", user=user, profiles=profiles, drafts=drafts, draft_fields=draft_fields, financial_years=years, experiences=experiences, indices=indices, calculation=financial_calculation(years, indices), active=request.query_params.get("section", "overview"))
+    return page(request, "dashboard.html", user=user, profiles=profiles, drafts=drafts, draft_fields=draft_fields, financial_years=years, experiences=experiences, item_summary=item_rolling_summary(experiences), indices=indices, calculation=financial_calculation(years, indices), active=request.query_params.get("section", "overview"))
 
 
 @app.post("/profiles/save")
@@ -524,12 +569,25 @@ async def save_experience(request: Request, user: User = Depends(require_user), 
     if entry is None:
         entry = Experience(user_id=user.id)
         db.add(entry)
-    text_fields = ("start_month_year", "end_month_year", "contract_id", "contract_name", "employer_name", "employer_address", "employer_phone", "employer_email", "work_description", "role", "award_date", "completion_date")
+    text_fields = ("start_month_year", "end_month_year", "contract_id", "contract_name", "employer_name", "employer_address", "work_description", "role", "award_date", "completion_date")
     for field in text_fields:
         setattr(entry, field, str(form.get(field, "")).strip())
+    for date_field in ("award_date", "completion_date"):
+        raw_date = str(getattr(entry, date_field, "") or "").strip()
+        if raw_date:
+            try:
+                setattr(entry, date_field, normalize_date_pair(raw_date, "auto")["bs"])
+            except ValueError as exc:
+                flash(request, f"Experience entry not saved: {date_field.replace('_', ' ').title()} — {exc}", "error")
+                return redirect("/dashboard", section="experience")
     entry.total_contract_amount = decimal(form.get("total_contract_amount"))
     entry.participation_percentage = decimal(form.get("participation_percentage"), Decimal("100"))
     entry.participation_amount = decimal(form.get("participation_amount")) or entry.total_contract_amount * entry.participation_percentage / 100
+    try:
+        entry.item_quantities = normalized_items(form)
+    except ValueError as exc:
+        flash(request, f"Experience entry not saved: {exc}", "error")
+        return redirect("/dashboard", section="experience")
     db.commit()
     flash(request, "Experience entry saved.", "success")
     return redirect("/dashboard", section="experience")

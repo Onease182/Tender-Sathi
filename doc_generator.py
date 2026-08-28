@@ -16,6 +16,7 @@ from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt
+from docx.oxml import OxmlElement
 from lxml import etree
 
 from format_utils import format_percentage
@@ -206,6 +207,11 @@ def _add_table(doc, headers: Iterable[str], rows: Iterable[Iterable[str]]):
     table.style = "Table Grid"
     for cell, header in zip(table.rows[0].cells, headers):
         _set_cell(cell, header, bold=True)
+    # Repeat the header row when a table spans pages in Word.
+    tr_pr = table.rows[0]._tr.get_or_add_trPr()
+    tbl_header = OxmlElement("w:tblHeader")
+    tbl_header.set(etree.QName("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "val"), "true")
+    tr_pr.append(tbl_header)
     for values in rows:
         cells = table.add_row().cells
         for cell, value in zip(cells, values):
@@ -213,7 +219,7 @@ def _add_table(doc, headers: Iterable[str], rows: Iterable[Iterable[str]]):
     return table
 
 
-def _new_form(title, subtitle=None):
+def _new_form(title, subtitle=None, company_name="", project_name="", ifb_number=""):
     doc = Document()
     section = doc.sections[0]
     section.top_margin = Inches(0.55)
@@ -225,11 +231,24 @@ def _new_form(title, subtitle=None):
     if subtitle:
         p = doc.add_paragraph(subtitle)
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    metadata = []
+    if company_name: metadata.append(("Bidder", company_name))
+    if project_name: metadata.append(("Project / tender", project_name))
+    if ifb_number: metadata.append(("IFB / contract no.", ifb_number))
+    if metadata:
+        header_line = "  |  ".join(f"{label}: {value}" for label, value in metadata)
+        meta = doc.add_paragraph(header_line)
+        meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in meta.runs:
+            run.font.size = Pt(8.5)
+    footer = section.footer.paragraphs[0]
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer.add_run("Generated from saved bidder records — verify against the tender-issued SBD.").font.size = Pt(8)
     return doc
 
 
 def build_fin2_doc(company_name, rows, nrb_indices, current_index, selected_rows, average):
-    doc = _new_form("FORM FIN-2", "Average Annual Construction Turnover")
+    doc = _new_form("FORM FIN-2", "Average Annual Construction Turnover", company_name=company_name)
     doc.add_paragraph(f"Applicant: {company_name}")
     doc.add_paragraph("The calculations below use the latest published NRB index as the reference index.")
     year_rows = []
@@ -262,10 +281,14 @@ def _experience_block(doc, entry, description_label, description):
         ("Role of bidder", entry.role),
         ("Total contract amount (NRS)", _money(entry.total_contract_amount)),
         ("JV/subcontractor participation", f"{float(entry.participation_percentage or 0):.2f}% / {_money(entry.participation_amount)}"),
-        ("Employer", f"{entry.employer_name}; {entry.employer_address}; {entry.employer_phone}; {entry.employer_email}"),
+        ("Employer", f"{entry.employer_name}; {entry.employer_address}"),
         ("Brief description of works", entry.work_description),
         (description_label, description),
     ])
+    items = getattr(entry, "item_quantities", None) or []
+    if items:
+        doc.add_heading("Key activities and quantities", level=3)
+        _add_table(doc, ["Item / activity", "Unit", "Quantity", "From (BS)", "Till (BS)"], [(item.get("item", ""), item.get("unit", ""), item.get("quantity", ""), item.get("from_bs", ""), item.get("till_bs", "")) for item in items])
 
 
 def _experience_year(entry):
@@ -280,24 +303,31 @@ def _experience_year(entry):
 
 
 def build_exp1_doc(company_name, entries):
-    doc = _new_form("FORM EXP-1", "General Construction Experience")
+    doc = _new_form("FORM EXP-1", "General Construction Experience", company_name=company_name)
     doc.add_paragraph(f"Bidder: {company_name}")
     rows = []
     for entry in entries:
         rows.append((entry.start_month_year, entry.end_month_year, _experience_year(entry), f"{entry.contract_id} / {entry.contract_name}", f"{entry.employer_name}\\n{entry.employer_address}", entry.work_description, entry.role))
     _add_table(doc, ["Starting month/year", "Ending month/year", "Year", "Contract ID / name", "Employer address", "Brief description", "Role"], rows or [("", "", "", "No entries selected", "", "", "")])
+    item_rows = []
+    for entry in entries:
+        for item in (getattr(entry, "item_quantities", None) or []):
+            item_rows.append((item.get("item", ""), item.get("unit", ""), item.get("quantity", ""), item.get("from_bs", ""), item.get("till_bs", ""), f"{entry.contract_id} / {entry.contract_name}"))
+    if item_rows:
+        doc.add_heading("Supplementary key activity quantities", level=2)
+        _add_table(doc, ["Item / activity", "Unit", "Quantity", "From (BS)", "Till (BS)", "Project"], item_rows)
     return _doc_bytes(doc)
 
 
 def build_exp2a_doc(company_name, entry, similarity):
-    doc = _new_form("FORM EXP-2(a)", "Specific Construction Experience")
+    doc = _new_form("FORM EXP-2(a)", "Specific Construction Experience", company_name=company_name)
     doc.add_paragraph(f"Bidder: {company_name}")
     _experience_block(doc, entry, "Description of similarity", similarity)
     return _doc_bytes(doc)
 
 
 def build_exp2b_doc(company_name, entries_with_descriptions):
-    doc = _new_form("FORM EXP-2(b)", "Specific Construction Experience in Key Activities")
+    doc = _new_form("FORM EXP-2(b)", "Specific Construction Experience in Key Activities", company_name=company_name)
     doc.add_paragraph(f"Bidder: {company_name}")
     for entry, description in entries_with_descriptions:
         _experience_block(doc, entry, "Production rate description", description)

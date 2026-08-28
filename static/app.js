@@ -28,6 +28,36 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  document.querySelectorAll('.item-section').forEach(section => {
+    const list = section.querySelector('.item-list');
+    const add = section.querySelector('.add-item');
+    if (!list || !add) return;
+    add.addEventListener('click', () => {
+      const row = list.querySelector('.item-row')?.cloneNode(true);
+      if (!row) return;
+      row.querySelectorAll('input').forEach(input => { input.value = ''; });
+      list.appendChild(row);
+    });
+    list.addEventListener('click', event => {
+      if (!event.target.classList.contains('remove-item')) return;
+      const rows = list.querySelectorAll('.item-row');
+      if (rows.length > 1) event.target.closest('.item-row').remove();
+    });
+    list.addEventListener('change', event => {
+      const input = event.target;
+      if (!input.matches('[name="item_from"], [name="item_till"]') || !input.value.trim()) return;
+      const value = input.value.trim();
+      const year = Number(value.split(/[-/.]/)[0]);
+      if (year >= 1900 && year <= 2050) {
+        input.title = 'AD input is accepted and will be converted to BS when saved.';
+        input.classList.add('date-ad-detected');
+      } else {
+        input.title = 'BS date detected.';
+        input.classList.remove('date-ad-detected');
+      }
+    });
+  });
+
   document.querySelectorAll('.financial-form').forEach(form => {
     const list = form.querySelector('.jv-list');
     if (!list) return;
