@@ -40,8 +40,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!input) return;
       const visible = input.type === 'text';
       input.type = visible ? 'password' : 'text';
-      button.textContent = visible ? 'Show' : 'Hide';
+      button.classList.toggle('is-visible', !visible);
       button.setAttribute('aria-label', visible ? 'Show password' : 'Hide password');
+      button.setAttribute('aria-pressed', String(!visible));
     });
   });
 
