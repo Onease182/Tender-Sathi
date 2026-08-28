@@ -291,6 +291,15 @@ def _experience_block(doc, entry, description_label, description):
         _add_table(doc, ["Item / activity", "Unit", "Quantity", "From (BS)", "Till (BS)"], [(item.get("item", ""), item.get("unit", ""), item.get("quantity", ""), item.get("from_bs", ""), item.get("till_bs", "")) for item in items])
 
 
+def _month_year_from_bs(value):
+    parts = str(value or "").split("-")
+    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+        return ""
+    year, month = int(parts[0]), int(parts[1])
+    names = ("Baisakh", "Jestha", "Ashadh", "Shrawan", "Bhadra", "Ashwin", "Kartik", "Mangsir", "Poush", "Magh", "Falgun", "Chaitra")
+    return f"{names[month - 1]} {year}" if 1 <= month <= 12 else ""
+
+
 def _experience_year(entry):
     """Return the completion year for EXP-1's distinct Year column.
 
@@ -307,7 +316,9 @@ def build_exp1_doc(company_name, entries):
     doc.add_paragraph(f"Bidder: {company_name}")
     rows = []
     for entry in entries:
-        rows.append((entry.start_month_year, entry.end_month_year, _experience_year(entry), f"{entry.contract_id} / {entry.contract_name}", f"{entry.employer_name}\\n{entry.employer_address}", entry.work_description, entry.role))
+        start_month = _month_year_from_bs(getattr(entry, "award_date", "")) or getattr(entry, "start_month_year", "")
+        end_month = _month_year_from_bs(getattr(entry, "completion_date", "")) or getattr(entry, "end_month_year", "")
+        rows.append((start_month, end_month, _experience_year(entry), f"{entry.contract_id} / {entry.contract_name}", f"{entry.employer_name}\\n{entry.employer_address}", entry.work_description, entry.role))
     _add_table(doc, ["Starting month/year", "Ending month/year", "Year", "Contract ID / name", "Employer address", "Brief description", "Role"], rows or [("", "", "", "No entries selected", "", "", "")])
     item_rows = []
     for entry in entries:

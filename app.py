@@ -32,6 +32,19 @@ import drafts as draft_store
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("tender_sathi")
+BS_MONTH_NAMES = ("Baisakh", "Jestha", "Ashadh", "Shrawan", "Bhadra", "Ashwin", "Kartik", "Mangsir", "Poush", "Magh", "Falgun", "Chaitra")
+
+
+def month_year_from_bs(value: str) -> str:
+    parts = str(value or "").split("-")
+    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+        return ""
+    year, month = int(parts[0]), int(parts[1])
+    if not 1 <= month <= 12:
+        return ""
+    return f"{BS_MONTH_NAMES[month - 1]} {year}"
+
+
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -582,6 +595,8 @@ async def save_experience(request: Request, user: User = Depends(require_user), 
                 return redirect("/dashboard", section="experience")
     entry.total_contract_amount = decimal(form.get("total_contract_amount"))
     entry.participation_percentage = decimal(form.get("participation_percentage"), Decimal("100"))
+    entry.start_month_year = month_year_from_bs(entry.award_date)
+    entry.end_month_year = month_year_from_bs(entry.completion_date)
     entry.participation_amount = decimal(form.get("participation_amount")) or entry.total_contract_amount * entry.participation_percentage / 100
     try:
         entry.item_quantities = normalized_items(form)
