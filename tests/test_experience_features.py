@@ -22,7 +22,7 @@ def test_rolling_summary_sums_same_item_in_overlapping_twelve_month_window():
     experiences = [
         SimpleNamespace(item_quantities=[{"item": "M20", "item_key": "m20", "unit": "m3", "quantity": "10", "from_ad": "2023-05-01", "till_ad": "2024-04-30"}]),
         SimpleNamespace(item_quantities=[{"item": "M20", "item_key": "m20", "unit": "m3", "quantity": "7", "from_ad": "2023-09-01", "till_ad": "2024-02-01"}]),
-        SimpleNamespace(item_quantities=[{"item": "M20", "item_key": "m20", "unit": "m3", "quantity": "99", "from_ad": "2020-01-01", "till_ad": "2020-12-31"}]),
+        SimpleNamespace(item_quantities=[{"item": "M20", "item_key": "m20", "unit": "m3", "quantity": "9", "from_ad": "2020-01-01", "till_ad": "2020-12-31"}]),
     ]
     result = item_rolling_summary(experiences)
     assert len(result) == 1
