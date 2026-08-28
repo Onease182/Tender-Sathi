@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Generator
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, create_engine, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
@@ -165,3 +165,8 @@ def init_db() -> None:
     if engine is None:
         return
     Base.metadata.create_all(bind=engine)
+    # create_all() does not alter existing tables. Keep this migration
+    # idempotent so upgraded installations do not fail when SQLAlchemy selects
+    # the newly added JSONB field before the manual migration is applied.
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE experiences ADD COLUMN IF NOT EXISTS item_quantities JSONB NOT NULL DEFAULT '[]'::jsonb"))
