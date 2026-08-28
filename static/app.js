@@ -1,4 +1,31 @@
 document.addEventListener('DOMContentLoaded', () => {
+  const formatDateInput = input => {
+    const digits = input.value.replace(/\D/g, '').slice(0, 8);
+    const parts = [];
+    if (digits.length > 0) parts.push(digits.slice(0, 4));
+    if (digits.length > 4) parts.push(digits.slice(4, 6));
+    if (digits.length > 6) parts.push(digits.slice(6, 8));
+    input.value = parts.join('-');
+    input.setCustomValidity('');
+  };
+  const validateDateInput = input => {
+    const value = input.value.trim();
+    if (!value) { input.setCustomValidity(''); return true; }
+    const validShape = /^\d{4}-(?:0[1-9]|1[0-2])-\d{2}$/.test(value);
+    input.setCustomValidity(validShape ? '' : 'Use YYYY-MM-DD format, for example 2081-01-01.');
+    return validShape;
+  };
+  document.querySelectorAll('[name="award_date"], [name="completion_date"], [name="item_from"], [name="item_till"]').forEach(input => {
+    input.inputMode = 'numeric';
+    input.maxLength = 10;
+    input.placeholder = 'YYYY-MM-DD';
+    input.addEventListener('input', () => formatDateInput(input));
+    input.addEventListener('blur', () => validateDateInput(input));
+    input.form?.addEventListener('submit', event => {
+      if (!validateDateInput(input)) event.preventDefault();
+    });
+  });
+
   document.querySelectorAll('form[method="post"]').forEach(form => {
     if (window.__csrfToken && !form.querySelector('[name="csrf_token"]')) {
       const token = document.createElement('input');
