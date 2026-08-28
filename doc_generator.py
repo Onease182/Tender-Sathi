@@ -183,6 +183,11 @@ class BidDocumentGenerator:
     generate = generate_bytes
 
 
+W_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+BASE_FONT = "Times New Roman"
+BASE_FONT_SIZE = Pt(12)
+
+
 def _money(value):
     try:
         return f"{float(value):,.2f}"
@@ -197,7 +202,8 @@ def _set_cell(cell, text, bold=False):
         paragraph.paragraph_format.space_after = Pt(0)
         for run in paragraph.runs:
             run.bold = bold
-            run.font.size = Pt(8.5)
+            run.font.name = BASE_FONT
+            run.font.size = BASE_FONT_SIZE
 
 
 def _add_table(doc, headers: Iterable[str], rows: Iterable[Iterable[str]]):
@@ -210,7 +216,7 @@ def _add_table(doc, headers: Iterable[str], rows: Iterable[Iterable[str]]):
     # Repeat the header row when a table spans pages in Word.
     tr_pr = table.rows[0]._tr.get_or_add_trPr()
     tbl_header = OxmlElement("w:tblHeader")
-    tbl_header.set(etree.QName("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "val"), "true")
+    tbl_header.set(etree.QName(W_NAMESPACE, "val"), "true")
     tr_pr.append(tbl_header)
     for values in rows:
         cells = table.add_row().cells
@@ -219,8 +225,24 @@ def _add_table(doc, headers: Iterable[str], rows: Iterable[Iterable[str]]):
     return table
 
 
+def _apply_base_font(doc):
+    """Times New Roman everywhere, with 12pt as the smallest size used."""
+    for name in ("Normal", "Heading 1", "Heading 2", "Heading 3", "Title", "Footer", "Header"):
+        try:
+            style = doc.styles[name]
+        except KeyError:
+            continue
+        style.font.name = BASE_FONT
+        r_fonts = style.element.get_or_add_rPr().get_or_add_rFonts()
+        for attribute in ("ascii", "hAnsi", "cs", "eastAsia"):
+            r_fonts.set(etree.QName(W_NAMESPACE, attribute), BASE_FONT)
+        if style.font.size is None or style.font.size < BASE_FONT_SIZE:
+            style.font.size = BASE_FONT_SIZE
+
+
 def _new_form(title, subtitle=None, company_name="", project_name="", ifb_number=""):
     doc = Document()
+    _apply_base_font(doc)
     section = doc.sections[0]
     section.top_margin = Inches(0.55)
     section.bottom_margin = Inches(0.55)
@@ -239,11 +261,9 @@ def _new_form(title, subtitle=None, company_name="", project_name="", ifb_number
         header_line = "  |  ".join(f"{label}: {value}" for label, value in metadata)
         meta = doc.add_paragraph(header_line)
         meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        for run in meta.runs:
-            run.font.size = Pt(8.5)
     footer = section.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    footer.add_run("Generated from saved bidder records — verify against the tender-issued SBD.").font.size = Pt(8)
+    footer.add_run("Generated from saved bidder records — verify against the tender-issued SBD.")
     return doc
 
 
@@ -273,7 +293,7 @@ def build_fin2_doc(company_name, rows, nrb_indices, current_index, selected_rows
     return _doc_bytes(doc)
 
 
-def _experience_block(doc, entry, description_label, description):
+def _experience_block(doc, entry, description_label, description, include_items=True):
     doc.add_heading(f"{entry.contract_id or 'Experience entry'} — {entry.contract_name}", level=2)
     _add_table(doc, ["Field", "Details"], [
         ("Starting / ending month-year", f"{entry.start_month_year} – {entry.end_month_year}"),
@@ -285,7 +305,7 @@ def _experience_block(doc, entry, description_label, description):
         ("Brief description of works", entry.work_description),
         (description_label, description),
     ])
-    items = getattr(entry, "item_quantities", None) or []
+    items = (getattr(entry, "item_quantities", None) or []) if include_items else []
     if items:
         doc.add_heading("Key activities and quantities", level=3)
         _add_table(doc, ["Item / activity", "Unit", "Quantity", "From (BS)", "Till (BS)"], [(item.get("item", ""), item.get("unit", ""), item.get("quantity", ""), item.get("from_bs", ""), item.get("till_bs", "")) for item in items])
@@ -361,7 +381,7 @@ def build_experience_doc(company_name, entries, similarity_entry=None, key_activ
     if similarity_entry is None:
         doc.add_paragraph("No qualifying contract selected.")
     else:
-        _experience_block(doc, similarity_entry, "Description of similarity", "")
+        _experience_block(doc, similarity_entry, "Description of similarity", "", include_items=False)
     doc.add_page_break()
     _form_heading(doc, "FORM EXP-2(b)", "Specific Construction Experience in Key Activities")
     key_activity_entries = list(key_activity_entries)
