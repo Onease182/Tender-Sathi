@@ -9,7 +9,10 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlparse
+from collections import defaultdict
+
+from email_validator import EmailNotValidError, validate_email
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -34,6 +37,9 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 app = FastAPI(title="Tender Sathi", description="Multi-tenant tender document preparation")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "change-me-in-production"), max_age=60 * 60 * 24 * 14, https_only=os.getenv("COOKIE_SECURE", "0") == "1", same_site="lax")
+RATE_LIMIT = defaultdict(list)
+RATE_LIMIT_WINDOW = 300
+RATE_LIMIT_MAX = 10
 
 
 class LoginRedirect(Exception):
@@ -42,7 +48,7 @@ class LoginRedirect(Exception):
 
 @app.exception_handler(LoginRedirect)
 async def login_redirect_handler(request: Request, exc: LoginRedirect):
-    return redirect("/login", next=request.url.path)
+    return redirect("/login", next=request.url.path + (f"?{request.url.query}" if request.url.query else ""))
 
 
 def redirect(path: str, **params):
@@ -58,8 +64,45 @@ def consume_flashes(request: Request):
     return request.session.pop("flashes", [])
 
 
+def csrf_token(request: Request) -> str:
+    token = request.session.get("csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        request.session["csrf_token"] = token
+    return token
+
+
+def csrf_protect(request: Request, form) -> None:
+    expected = request.session.get("csrf_token")
+    supplied = str(form.get("csrf_token", ""))
+    if not expected or not secrets.compare_digest(expected, supplied):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+
+def rate_limited(request: Request, action: str) -> bool:
+    key = f"{action}:{request.client.host if request.client else 'unknown'}"
+    now = datetime.utcnow().timestamp()
+    RATE_LIMIT[key] = [stamp for stamp in RATE_LIMIT[key] if now - stamp < RATE_LIMIT_WINDOW]
+    RATE_LIMIT[key].append(now)
+    return len(RATE_LIMIT[key]) > RATE_LIMIT_MAX
+
+
+def valid_email(value: str) -> bool:
+    try:
+        validate_email(value, check_deliverability=False)
+        return True
+    except EmailNotValidError:
+        return False
+
+
+def safe_next(value: str | None) -> str:
+    candidate = unquote(value or "")
+    parsed = urlparse(candidate)
+    return candidate if candidate.startswith("/") and not candidate.startswith("//") and not parsed.netloc else "/dashboard"
+
+
 def page(request: Request, template: str, user: User | None = None, **context):
-    return TEMPLATES.TemplateResponse(template, {"request": request, "user": user, "flashes": consume_flashes(request), **context})
+    return TEMPLATES.TemplateResponse(template, {"request": request, "user": user, "csrf_token": csrf_token(request), "flashes": consume_flashes(request), **context})
 
 
 def user_from_request(request: Request, db: Session | None):
@@ -161,11 +204,14 @@ def dev_admin_page(request: Request, db: Session | None = Depends(get_optional_d
 
 
 @app.post("/dev-admin")
-def create_dev_admin(request: Request, db: Session | None = Depends(get_optional_db)):
+async def create_dev_admin(request: Request, db: Session | None = Depends(get_optional_db)):
     if not dev_admin_allowed(request):
         raise HTTPException(status_code=404)
+    form = await request.form()
+    csrf_protect(request, form)
     password = os.getenv("DEV_ADMIN_PASSWORD", "")
     if db is None or len(password) < 8:
+        flash(request, "Local admin is not configured: set DATABASE_URL and DEV_ADMIN_PASSWORD (at least 8 characters).", "error")
         return redirect("/dev-admin")
     email = dev_admin_email()
     user = db.scalar(select(User).where(User.email == email))
@@ -192,14 +238,21 @@ def signup_page(request: Request):
 @app.post("/signup")
 async def signup(request: Request, db: Session = Depends(get_db)):
     form = await request.form()
+    csrf_protect(request, form)
+    if rate_limited(request, "signup"):
+        flash(request, "Too many signup attempts. Please try again later.", "error")
+        return redirect("/signup")
     email = str(form.get("email", "")).strip().lower()
     company_name = str(form.get("company_name", "")).strip()
     password = str(form.get("password", ""))
-    if not email or not company_name or len(password) < 8:
+    if password != str(form.get("password_confirm", "")):
+        flash(request, "Passwords do not match.", "error")
+        return redirect("/signup")
+    if not valid_email(email) or not company_name or len(password) < 8:
         flash(request, "Enter a company name, a valid email, and a password of at least 8 characters.", "error")
         return redirect("/signup")
     if db.scalar(select(User).where(User.email == email)):
-        flash(request, "An account with that email already exists.", "error")
+        flash(request, "If the account can be created, verification instructions will be sent to the submitted email.", "info")
         return redirect("/login")
     admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
     user = User(email=email, company_name=company_name, password_hash=pwd_context.hash(password), is_admin=bool(admin_email and email == admin_email))
@@ -214,22 +267,27 @@ async def signup(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return page(request, "auth/login.html", title="Sign in")
+    return page(request, "auth/login.html", title="Sign in", next=safe_next(request.query_params.get("next")))
 
 
 @app.post("/login")
 async def login(request: Request, db: Session = Depends(get_db)):
     form = await request.form()
+    csrf_protect(request, form)
+    if rate_limited(request, "login"):
+        flash(request, "Too many sign-in attempts. Please try again later.", "error")
+        return redirect("/login")
     email = str(form.get("email", "")).strip().lower()
+    next_path = safe_next(form.get("next"))
     user = db.scalar(select(User).where(User.email == email))
     if user is None or not pwd_context.verify(str(form.get("password", "")), user.password_hash):
         flash(request, "Email or password was not recognized.", "error")
-        return redirect("/login")
+        return redirect("/login", next=next_path)
     request.session["user_id"] = user.id
     if not user.is_verified:
         flash(request, "Please verify your email before using the dashboard.", "warning")
         return redirect("/verify-needed")
-    return redirect("/dashboard")
+    return redirect(next_path)
 
 
 @app.get("/logout")
@@ -259,7 +317,8 @@ def verify_email(request: Request, token: str, db: Session = Depends(get_db)):
 
 
 @app.post("/resend-verification")
-def resend_verification(request: Request, db: Session = Depends(get_db)):
+async def resend_verification(request: Request, db: Session = Depends(get_db)):
+    csrf_protect(request, await request.form())
     user = user_from_request(request, db)
     if user and not user.is_verified:
         raw = create_token(db, user.id, "verify")
@@ -276,6 +335,10 @@ def forgot_page(request: Request):
 @app.post("/forgot-password")
 async def forgot_password(request: Request, db: Session = Depends(get_db)):
     form = await request.form()
+    csrf_protect(request, form)
+    if rate_limited(request, "forgot-password"):
+        flash(request, "Too many reset requests. Please try again later.", "error")
+        return redirect("/login")
     email = str(form.get("email", "")).strip().lower()
     user = db.scalar(select(User).where(User.email == email))
     if user:
@@ -293,9 +356,16 @@ def reset_page(request: Request, token: str):
 @app.post("/reset-password")
 async def reset_password(request: Request, db: Session = Depends(get_db)):
     form = await request.form()
+    csrf_protect(request, form)
+    if rate_limited(request, "reset-password"):
+        flash(request, "Too many reset attempts. Please try again later.", "error")
+        return redirect("/forgot-password")
     token = str(form.get("token", ""))
     record = db.scalar(select(AuthToken).where(AuthToken.token == token_hash(token), AuthToken.kind == "reset"))
     password = str(form.get("password", ""))
+    if password != str(form.get("password_confirm", "")):
+        flash(request, "Passwords do not match.", "error")
+        return redirect("/forgot-password")
     if record is None or record.expires_at < datetime.utcnow() or len(password) < 8:
         flash(request, "The reset link is invalid, expired, or the password is too short.", "error")
         return redirect("/forgot-password")
@@ -315,10 +385,11 @@ def decimal(value, default=Decimal("0")):
 
 
 def fy_sort(value: str):
-    try:
-        return int(str(value).split("/")[0])
-    except (ValueError, IndexError):
-        return 0
+    text = str(value).strip()
+    parts = text.split("/")
+    if len(parts) != 2 or len(parts[0]) != 4 or len(parts[1]) != 3 or not all(part.isdigit() for part in parts):
+        raise ValueError(f"Invalid fiscal year: {value}. Use NNNN/NNN, for example 2080/081.")
+    return int(parts[0])
 
 
 def financial_rows(db: Session, user_id: int):
@@ -348,8 +419,8 @@ def financial_calculation(rows, indices):
 
 def money(value):
     try:
-        return f"{float(value):,.2f}"
-    except (TypeError, ValueError):
+        return f"{Decimal(str(value or 0)):,.2f}"
+    except (TypeError, ValueError, InvalidOperation):
         return "0.00"
 
 
@@ -371,6 +442,7 @@ def dashboard(request: Request, user: User = Depends(require_user), db: Session 
 @app.post("/profiles/save")
 async def save_profile(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
     form = await request.form()
+    csrf_protect(request, form)
     raw_id = str(form.get("profile_id", "")).strip()
     profile = db.scalar(select(PartnerProfile).where(PartnerProfile.id == int(raw_id), PartnerProfile.user_id == user.id)) if raw_id.isdigit() else None
     values = {"name": str(form.get("name", "Partner profile")).strip() or "Partner profile", "role": str(form.get("role", "lead"))}
@@ -381,7 +453,8 @@ async def save_profile(request: Request, user: User = Depends(require_user), db:
 
 
 @app.post("/profiles/delete/{profile_id}")
-def delete_profile(profile_id: int, request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+async def delete_profile(profile_id: int, request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    csrf_protect(request, await request.form())
     if profile_store.delete_profile(db, user.id, profile_id):
         flash(request, "Partner profile deleted.", "success")
     return redirect("/dashboard", section="profiles")
@@ -390,6 +463,7 @@ def delete_profile(profile_id: int, request: Request, user: User = Depends(requi
 @app.post("/drafts/save")
 async def save_draft(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
     form = await request.form()
+    csrf_protect(request, form)
     raw_id = str(form.get("draft_id", "")).strip()
     draft = db.scalar(select(Draft).where(Draft.id == int(raw_id), Draft.user_id == user.id)) if raw_id.isdigit() else None
     name = str(form.get("draft_name", "Untitled bid")).strip() or "Untitled bid"
@@ -400,7 +474,8 @@ async def save_draft(request: Request, user: User = Depends(require_user), db: S
 
 
 @app.post("/drafts/delete/{draft_id}")
-def delete_draft(draft_id: int, request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+async def delete_draft(draft_id: int, request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    csrf_protect(request, await request.form())
     if draft_store.delete_draft(db, user.id, draft_id):
         flash(request, "Draft deleted.", "success")
     return redirect("/dashboard", section="generate")
@@ -409,6 +484,7 @@ def delete_draft(draft_id: int, request: Request, user: User = Depends(require_u
 @app.post("/financial/save")
 async def save_financial(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
     form = await request.form()
+    csrf_protect(request, form)
     raw_id = str(form.get("year_id", "")).strip()
     row = db.scalar(select(FinancialYear).where(FinancialYear.user_id == user.id, FinancialYear.id == int(raw_id))) if raw_id.isdigit() else None
     if row is None:
@@ -429,7 +505,8 @@ async def save_financial(request: Request, user: User = Depends(require_user), d
 
 
 @app.post("/financial/delete/{year_id}")
-def delete_financial(year_id: int, request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+async def delete_financial(year_id: int, request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    csrf_protect(request, await request.form())
     row = db.scalar(select(FinancialYear).where(FinancialYear.id == year_id, FinancialYear.user_id == user.id))
     if row:
         db.delete(row)
@@ -441,6 +518,7 @@ def delete_financial(year_id: int, request: Request, user: User = Depends(requir
 @app.post("/experience/save")
 async def save_experience(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
     form = await request.form()
+    csrf_protect(request, form)
     raw_id = str(form.get("experience_id", "")).strip()
     entry = db.scalar(select(Experience).where(Experience.id == int(raw_id), Experience.user_id == user.id)) if raw_id.isdigit() else None
     if entry is None:
@@ -458,7 +536,8 @@ async def save_experience(request: Request, user: User = Depends(require_user), 
 
 
 @app.post("/experience/delete/{experience_id}")
-def delete_experience(experience_id: int, request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+async def delete_experience(experience_id: int, request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    csrf_protect(request, await request.form())
     entry = db.scalar(select(Experience).where(Experience.id == experience_id, Experience.user_id == user.id))
     if entry:
         db.delete(entry)
@@ -492,7 +571,8 @@ async def save_nrb(request: Request, user: User = Depends(require_user), db: Ses
 
 
 @app.post("/admin/nrb/delete/{index_id}")
-def delete_nrb(index_id: int, request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+async def delete_nrb(index_id: int, request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    csrf_protect(request, await request.form())
     if user.is_admin:
         row = db.get(NRBIndex, index_id)
         if row:
@@ -518,8 +598,9 @@ def bid_data(form):
 
 
 @app.post("/generate/bid")
-async def generate_bid(request: Request, user: User = Depends(require_user)):
+async def generate_bid(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
     form = await request.form()
+    csrf_protect(request, form)
     data = bid_data(form)
     generator = BidDocumentGenerator(BASE_DIR, create_dirs=False)
     try:
@@ -529,7 +610,10 @@ async def generate_bid(request: Request, user: User = Depends(require_user)):
             raise ValueError(f"Partner percentage shares must add up to 100%. Current total: {total:.2f}%")
         content = generator.generate_bytes(data)
     except Exception as exc:
-        flash(request, f"Bid generation failed: {exc}", "error")
+        draft_name = str(form.get("draft_name", "Untitled bid")).strip() or "Untitled bid"
+        field_data = {key: str(value) for key, value in form.multi_items() if key != "csrf_token"}
+        draft_store.save_draft(db, user.id, draft_name, field_data)
+        flash(request, f"Bid generation failed: {exc}. Your entries were saved as a draft.", "error")
         return redirect("/dashboard", section="generate")
     filename = "".join(char if char.isalnum() or char in "-_" else "_" for char in (data.get("JV_NAME") or "bid"))[:50].strip("_") or "tender_sathi_bid"
     return StreamingResponse(iter([content]), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Content-Disposition": f'attachment; filename="{filename}.docx"'})
@@ -538,6 +622,7 @@ async def generate_bid(request: Request, user: User = Depends(require_user)):
 @app.post("/generate/fin2")
 async def generate_fin2(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
     form = await request.form()
+    csrf_protect(request, form)
     selected_ids = {int(value) for value in form.getlist("financial_year_ids") if str(value).isdigit()}
     rows = [row for row in financial_rows(db, user.id) if row.id in selected_ids] or financial_rows(db, user.id)
     indices = db.scalars(select(NRBIndex).order_by(NRBIndex.fiscal_year.desc())).all()
@@ -553,6 +638,7 @@ async def generate_fin2(request: Request, user: User = Depends(require_user), db
 @app.post("/generate/exp1")
 async def generate_exp1(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
     form = await request.form()
+    csrf_protect(request, form)
     ids = [int(value) for value in form.getlist("experience_ids") if str(value).isdigit()]
     entries = db.scalars(select(Experience).where(Experience.user_id == user.id, Experience.id.in_(ids))).all() if ids else []
     content = build_exp1_doc(user.company_name, entries)
@@ -562,6 +648,7 @@ async def generate_exp1(request: Request, user: User = Depends(require_user), db
 @app.post("/generate/exp2a")
 async def generate_exp2a(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
     form = await request.form()
+    csrf_protect(request, form)
     value = str(form.get("experience_id", ""))
     entry = db.scalar(select(Experience).where(Experience.user_id == user.id, Experience.id == int(value))) if value.isdigit() else None
     if entry is None:
@@ -574,6 +661,7 @@ async def generate_exp2a(request: Request, user: User = Depends(require_user), d
 @app.post("/generate/exp2b")
 async def generate_exp2b(request: Request, user: User = Depends(require_user), db: Session = Depends(get_db)):
     form = await request.form()
+    csrf_protect(request, form)
     ids = [int(value) for value in form.getlist("experience_ids") if str(value).isdigit()]
     entries = db.scalars(select(Experience).where(Experience.user_id == user.id, Experience.id.in_(ids))).all() if ids else []
     by_id = {entry.id: entry for entry in entries}

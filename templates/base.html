@@ -24,6 +24,7 @@
     {% block content %}{% endblock %}
   </main>
   <footer class="footer"><span>Tender Sathi</span><span>Built for Nepali construction tender preparation</span></footer>
+  <script>window.__csrfToken = {{ csrf_token|tojson }};</script>
   <script src="/static/app.js"></script>
 </body>
 </html>

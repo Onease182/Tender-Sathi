@@ -52,3 +52,18 @@ def test_exp1_year_column_uses_completion_year():
     table = Document(BytesIO(build_exp1_doc("Example Builders", [entry]))).tables[0]
     assert [cell.text for cell in table.rows[0].cells[:3]] == ["Starting month/year", "Ending month/year", "Year"]
     assert table.rows[1].cells[2].text == "2080"
+
+
+def test_fiscal_year_validation_rejects_typos():
+    from app import fy_sort
+    assert fy_sort("2080/081") == 2080
+    import pytest
+    with pytest.raises(ValueError):
+        fy_sort("2080-081")
+
+
+def test_safe_next_rejects_external_redirects():
+    from app import safe_next
+    assert safe_next("/dashboard?section=generate") == "/dashboard?section=generate"
+    assert safe_next("https://example.com/account") == "/dashboard"
+    assert safe_next("//example.com/account") == "/dashboard"
