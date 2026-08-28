@@ -477,10 +477,20 @@ def item_rolling_summary(experiences):
             window_start = window_end - timedelta(days=364)
             contributing = [(other, other_start, other_end) for _, other, other_start, other_end in rows if other_start <= window_end and other_end >= window_start]
             total = sum(Decimal(str(other.get("quantity", 0))) for other, _, _ in contributing)
-            windows.append({"item": item.get("item", item_key), "unit": unit, "from_ad": window_start.isoformat(), "till_ad": window_end.isoformat(), "from_bs": display_bs(window_start.isoformat()), "till_bs": display_bs(window_end.isoformat()), "quantity": total, "projects": len(contributing)})
+            windows.append({"key": item_key, "item": item.get("item", item_key), "unit": unit, "from_ad": window_start.isoformat(), "till_ad": window_end.isoformat(), "from_bs": display_bs(window_start.isoformat()), "till_bs": display_bs(window_end.isoformat()), "quantity": total, "projects": len(contributing)})
         # Prefer the highest combined quantity; if totals tie, keep the latest window.
         summaries.append(max(windows, key=lambda row: (row["quantity"], row["till_ad"])))
     return sorted(summaries, key=lambda row: (row["item"].lower(), row["unit"]))
+
+
+def summary_item_key(row) -> str:
+    return f"{row['key']}||{row['unit']}"
+
+
+def filtered_item_summary(summary, requested_keys):
+    """Keep only the requested key activities; an empty request keeps every item."""
+    wanted = {str(value) for value in requested_keys if str(value).strip()}
+    return [row for row in summary if summary_item_key(row) in wanted] if wanted else list(summary)
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -722,7 +732,8 @@ async def generate_experience(request: Request, user: User = Depends(require_use
     selected = [(by_id[item_id], "") for item_id in ids if item_id in by_id]
     similarity_id = str(form.get("experience_id", ""))
     similarity_entry = by_id.get(int(similarity_id)) if similarity_id.isdigit() else None
-    content = build_experience_doc(user.company_name, [entry for entry, _ in selected], similarity_entry, selected, item_rolling_summary(entries))
+    summary = filtered_item_summary(item_rolling_summary(entries), form.getlist("summary_item_keys"))
+    content = build_experience_doc(user.company_name, [entry for entry, _ in selected], similarity_entry, selected, summary)
     return StreamingResponse(iter([content]), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Content-Disposition": 'attachment; filename="Experience_Forms_EXP-1_EXP-2a_EXP-2b.docx"'})
 
 
