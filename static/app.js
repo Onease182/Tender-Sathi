@@ -58,12 +58,36 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.item-section').forEach(section => {
     const list = section.querySelector('.item-list');
     const add = section.querySelector('.add-item');
-    if (!list || !add) return;
+    const form = section.closest('form');
+    if (!list || !add || !form) return;
+    const syncItemPeriods = () => {
+      const award = form.elements.award_date?.value.trim() || '';
+      const completion = form.elements.completion_date?.value.trim() || '';
+      list.querySelectorAll('[name="item_from"]').forEach(input => {
+        if (!input.value.trim() || input.dataset.autoPeriod === 'from') {
+          input.value = award;
+          input.dataset.autoPeriod = award ? 'from' : '';
+        }
+      });
+      list.querySelectorAll('[name="item_till"]').forEach(input => {
+        if (!input.value.trim() || input.dataset.autoPeriod === 'till') {
+          input.value = completion;
+          input.dataset.autoPeriod = completion ? 'till' : '';
+        }
+      });
+    };
+    form.elements.award_date?.addEventListener('input', () => requestAnimationFrame(syncItemPeriods));
+    form.elements.completion_date?.addEventListener('input', () => requestAnimationFrame(syncItemPeriods));
+    list.querySelectorAll('[name="item_from"], [name="item_till"]').forEach(input => {
+      input.addEventListener('input', () => { input.dataset.autoPeriod = ''; });
+    });
+    syncItemPeriods();
     add.addEventListener('click', () => {
       const row = list.querySelector('.item-row')?.cloneNode(true);
       if (!row) return;
-      row.querySelectorAll('input').forEach(input => { input.value = ''; });
+      row.querySelectorAll('input').forEach(input => { input.value = ''; input.dataset.autoPeriod = ''; });
       list.appendChild(row);
+      syncItemPeriods();
     });
     list.addEventListener('click', event => {
       if (!event.target.classList.contains('remove-item')) return;

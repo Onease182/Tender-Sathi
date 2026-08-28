@@ -438,7 +438,7 @@ def money(value):
         return "0.00"
 
 
-def normalized_items(form):
+def normalized_items(form, default_from="", default_till=""):
     names, units, quantities, starts, ends = (form.getlist(name) for name in ("item_name", "item_unit", "item_quantity", "item_from", "item_till"))
     items = []
     for index, raw_name in enumerate(names):
@@ -451,7 +451,7 @@ def normalized_items(form):
             continue
         item = {"item": name, "item_key": " ".join(name.lower().split()), "unit": str(units[index] if index < len(units) else "").strip(), "quantity": str(quantity)}
         for label, values in (("from", starts), ("till", ends)):
-            raw_date = str(values[index] if index < len(values) else "").strip()
+            raw_date = str(values[index] if index < len(values) else "").strip() or (default_from if label == "from" else default_till)
             if raw_date:
                 normalized = normalize_date_pair(raw_date, "auto")
                 item[f"{label}_bs"] = normalized["bs"]
@@ -599,7 +599,7 @@ async def save_experience(request: Request, user: User = Depends(require_user), 
     entry.end_month_year = month_year_from_bs(entry.completion_date)
     entry.participation_amount = decimal(form.get("participation_amount")) or entry.total_contract_amount * entry.participation_percentage / 100
     try:
-        entry.item_quantities = normalized_items(form)
+        entry.item_quantities = normalized_items(form, entry.award_date, entry.completion_date)
     except ValueError as exc:
         flash(request, f"Experience entry not saved: {exc}", "error")
         return redirect("/dashboard", section="experience")

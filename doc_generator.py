@@ -279,7 +279,7 @@ def _experience_block(doc, entry, description_label, description):
         ("Starting / ending month-year", f"{entry.start_month_year} – {entry.end_month_year}"),
         ("Award / completion date", f"{entry.award_date} / {entry.completion_date}"),
         ("Role of bidder", entry.role),
-        ("Total contract amount (NRS)", _money(entry.total_contract_amount)),
+        ("Final Payment Amount (Without VAT) (NRS)", _money(entry.total_contract_amount)),
         ("JV/subcontractor participation", f"{float(entry.participation_percentage or 0):.2f}% / {_money(entry.participation_amount)}"),
         ("Employer", f"{entry.employer_name}; {entry.employer_address}"),
         ("Brief description of works", entry.work_description),
