@@ -66,6 +66,17 @@ def test_experience_document_holds_all_three_forms_and_rolling_summary():
     assert [cell.text for cell in summary_table.rows[1].cells] == ["M20", "m3", "2080-01-01 to 2080-12-30", "17", "2"]
 
 
+def test_experience_document_uses_times_new_roman_and_omits_items_from_exp2a():
+    entry = SimpleNamespace(start_month_year="Jan 2078", end_month_year="Dec 2080", award_date="2078-01-05", completion_date="2080-12-30", contract_id="C-1", contract_name="Bridge", employer_name="Road Office", employer_address="Pokhara", work_description="Bridge construction", role="Contractor", total_contract_amount=Decimal("100"), participation_percentage=Decimal("100"), participation_amount=Decimal("100"), item_quantities=[{"item": "M20", "unit": "m3", "quantity": "10", "from_bs": "2080-01-01", "till_bs": "2080-06-01"}])
+    document = Document(BytesIO(build_experience_doc("Example Builders", [entry], entry, [(entry, "")], [])))
+    # EXP-2(b) keeps its key activity table; EXP-2(a) does not repeat it.
+    assert [paragraph.text for paragraph in document.paragraphs].count("Key activities and quantities") == 1
+    assert document.styles["Normal"].font.name == "Times New Roman"
+    assert min(style.font.size.pt for style in (document.styles[name] for name in ("Normal", "Heading 1", "Heading 2", "Heading 3"))) == 12
+    cell_sizes = {run.font.size.pt for table in document.tables for row in table.rows for cell in row.cells for paragraph in cell.paragraphs for run in paragraph.runs if run.font.size}
+    assert cell_sizes == {12}
+
+
 def test_fiscal_year_validation_rejects_typos():
     from app import fy_sort
     assert fy_sort("2080/081") == 2080
