@@ -478,7 +478,8 @@ def item_rolling_summary(experiences):
             contributing = [(other, other_start, other_end) for _, other, other_start, other_end in rows if other_start <= window_end and other_end >= window_start]
             total = sum(Decimal(str(other.get("quantity", 0))) for other, _, _ in contributing)
             windows.append({"item": item.get("item", item_key), "unit": unit, "from_ad": window_start.isoformat(), "till_ad": window_end.isoformat(), "from_bs": display_bs(window_start.isoformat()), "till_bs": display_bs(window_end.isoformat()), "quantity": total, "projects": len(contributing)})
-        summaries.append(max(windows, key=lambda row: row["till_ad"]))
+        # Prefer the highest combined quantity; if totals tie, keep the latest window.
+        summaries.append(max(windows, key=lambda row: (row["quantity"], row["till_ad"])))
     return sorted(summaries, key=lambda row: (row["item"].lower(), row["unit"]))
 
 

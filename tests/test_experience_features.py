@@ -30,6 +30,19 @@ def test_rolling_summary_sums_same_item_in_overlapping_twelve_month_window():
     assert result[0]["projects"] == 2
 
 
+def test_rolling_summary_selects_highest_total_not_latest_window():
+    experiences = [
+        SimpleNamespace(item_quantities=[{"item": "M20", "item_key": "m20", "unit": "m3", "quantity": "100", "from_ad": "2023-05-01", "till_ad": "2024-04-30"}]),
+        SimpleNamespace(item_quantities=[{"item": "M20", "item_key": "m20", "unit": "m3", "quantity": "80", "from_ad": "2023-09-01", "till_ad": "2024-02-01"}]),
+        SimpleNamespace(item_quantities=[{"item": "M20", "item_key": "m20", "unit": "m3", "quantity": "5", "from_ad": "2025-01-01", "till_ad": "2025-12-31"}]),
+    ]
+    result = item_rolling_summary(experiences)
+    assert len(result) == 1
+    assert result[0]["quantity"] == Decimal("180")
+    assert result[0]["projects"] == 2
+    assert result[0]["till_ad"] == "2024-04-30"
+
+
 def test_normalized_items_keeps_optional_dates_empty():
     form = SimpleNamespace(
         getlist=lambda name: {
